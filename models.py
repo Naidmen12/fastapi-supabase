@@ -1,3 +1,4 @@
+# models.py
 from sqlalchemy import Column, Integer, String, Boolean, Text, BigInteger, ForeignKey, TIMESTAMP
 from sqlalchemy.sql import func
 from db import Base
