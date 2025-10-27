@@ -1,3 +1,4 @@
+# db.py
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
@@ -14,9 +15,19 @@ if "sslmode" not in DATABASE_URL:
     else:
         DATABASE_URL = DATABASE_URL + "?sslmode=require"
 
-# Crear motor con pool_pre_ping para recuperar conexiones muertas
-motor = create_engine(DATABASE_URL, pool_pre_ping=True)
-SesionLocal = sessionmaker(autocommit=False, autoflush=False, bind=motor)
+# Conect timeout rápido para fallos inmediatos desde Render si la DB no responde
+# pool_pre_ping para sacar conexiones muertas del pool
+# ajusta pool_size / max_overflow según necesidad
+engine = create_engine(
+    DATABASE_URL,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": 5},  # fallo rápido (segundos)
+    pool_size=10,
+    max_overflow=20,
+    # echo=True,  # opcional para debug
+)
+
+SesionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
 def obtener_bd():
