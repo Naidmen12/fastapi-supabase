@@ -1,0 +1,96 @@
+{
+  "Version": 1,
+  "WorkspaceRootPath": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\",
+  "Documents": [
+    {
+      "AbsoluteMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\schemas.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|solutionrelative:schemas.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\models.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|solutionrelative:models.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\ApiRender.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|solutionrelative:ApiRender.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\db.py||{8B382828-6202-11D1-8870-0000F87579D2}",
+      "RelativeMoniker": "D:0:0:{599E1016-A581-4EE8-A4CE-8C8283D30F58}|ApiRender.pyproj|solutionrelative:db.py||{8B382828-6202-11D1-8870-0000F87579D2}"
+    }
+  ],
+  "DocumentGroupContainers": [
+    {
+      "Orientation": 0,
+      "VerticalTabListWidth": 256,
+      "DocumentGroups": [
+        {
+          "DockedWidth": 200,
+          "SelectedChildIndex": 2,
+          "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{40ea2e6b-2121-4bb8-a43e-c83c04b51041}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{3ae79031-e1bc-11d0-8f78-00a0c9110057}"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "schemas.py",
+              "DocumentMoniker": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\schemas.py",
+              "RelativeDocumentMoniker": "schemas.py",
+              "ToolTip": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\schemas.py",
+              "RelativeToolTip": "schemas.py",
+              "ViewState": "AgIAAA4AAAAAAAAAAAAAAA4AAAAXAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAG9SURBVDhPlZPPSwJBFMe/Vu76o8DVgqKiyINWGAiZXaJTt24S2KFzEP0BQdClc8euXToE3cJLeA36ASKULmxEGlFC/iBDY1utpt3ZUdtKqw885vtm37yZ92bWBCNtqnWz8Suyak\u002B6ZBBCmKIMZzIZopl0lSKTi\u002BtU1ywSiWjBY3pog/pO5XI5rY2vb\u002B/YO77BhN\u002BPubVd\u002Bk3DbDYjmUyKqjQkqSeQZRkHRwmEt09weH6Pi9sizFY7\u002BsQw/c5xHOx2\u002B7ck9R7k83kyvbSB/uA8FpVVzA6kMDIeAvd4ituJqJpMYJGAxWKB0\u002Bmkaw3N2tlcwfNDCssLQ/D6p8C9XqotnUQ738UidEymRu872Egn5cI9wu4XwNULvDwDnVVsRWeAs30WBfh8PgSDQeZ9KqFQKBBFUahWShkUr6NwjYbQ8WV3DZvNBofDQdcaEsRiMSQSCTbzM7UT1BL89GD\u002BRf0E2i1UKhXmtcZqtUIQBGMJuVyOxOPxP5UQCAS\u002BX2O1WmXqd7LZLFOfTpBOpwnP88xrTalUgsfjMZYgSRIRRZG\u002BsuaY4HaPwOv1DqrOnT7ToEe1dl02Rfsj86q9UQ/AB7\u002BMoBmsMsu/AAAAAElFTkSuQmCC",
+              "WhenOpened": "2025-10-27T07:07:51.392Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "models.py",
+              "DocumentMoniker": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\models.py",
+              "RelativeDocumentMoniker": "models.py",
+              "ToolTip": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\models.py",
+              "RelativeToolTip": "models.py",
+              "ViewState": "AgIAABUAAAAAAAAAAAAAABUAAABLAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAG9SURBVDhPlZPPSwJBFMe/Vu76o8DVgqKiyINWGAiZXaJTt24S2KFzEP0BQdClc8euXToE3cJLeA36ASKULmxEGlFC/iBDY1utpt3ZUdtKqw885vtm37yZ92bWBCNtqnWz8Suyak\u002B6ZBBCmKIMZzIZopl0lSKTi\u002BtU1ywSiWjBY3pog/pO5XI5rY2vb\u002B/YO77BhN\u002BPubVd\u002Bk3DbDYjmUyKqjQkqSeQZRkHRwmEt09weH6Pi9sizFY7\u002BsQw/c5xHOx2\u002B7ck9R7k83kyvbSB/uA8FpVVzA6kMDIeAvd4ituJqJpMYJGAxWKB0\u002Bmkaw3N2tlcwfNDCssLQ/D6p8C9XqotnUQ738UidEymRu872Egn5cI9wu4XwNULvDwDnVVsRWeAs30WBfh8PgSDQeZ9KqFQKBBFUahWShkUr6NwjYbQ8WV3DZvNBofDQdcaEsRiMSQSCTbzM7UT1BL89GD\u002BRf0E2i1UKhXmtcZqtUIQBGMJuVyOxOPxP5UQCAS\u002BX2O1WmXqd7LZLFOfTpBOpwnP88xrTalUgsfjMZYgSRIRRZG\u002BsuaY4HaPwOv1DqrOnT7ToEe1dl02Rfsj86q9UQ/AB7\u002BMoBmsMsu/AAAAAElFTkSuQmCC",
+              "WhenOpened": "2025-10-27T07:05:08.317Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "db.py",
+              "DocumentMoniker": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\db.py",
+              "RelativeDocumentMoniker": "db.py",
+              "ToolTip": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\db.py",
+              "RelativeToolTip": "db.py",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAUAAABAAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAG9SURBVDhPlZPPSwJBFMe/Vu76o8DVgqKiyINWGAiZXaJTt24S2KFzEP0BQdClc8euXToE3cJLeA36ASKULmxEGlFC/iBDY1utpt3ZUdtKqw885vtm37yZ92bWBCNtqnWz8Suyak\u002B6ZBBCmKIMZzIZopl0lSKTi\u002BtU1ywSiWjBY3pog/pO5XI5rY2vb\u002B/YO77BhN\u002BPubVd\u002Bk3DbDYjmUyKqjQkqSeQZRkHRwmEt09weH6Pi9sizFY7\u002BsQw/c5xHOx2\u002B7ck9R7k83kyvbSB/uA8FpVVzA6kMDIeAvd4ituJqJpMYJGAxWKB0\u002Bmkaw3N2tlcwfNDCssLQ/D6p8C9XqotnUQ738UidEymRu872Egn5cI9wu4XwNULvDwDnVVsRWeAs30WBfh8PgSDQeZ9KqFQKBBFUahWShkUr6NwjYbQ8WV3DZvNBofDQdcaEsRiMSQSCTbzM7UT1BL89GD\u002BRf0E2i1UKhXmtcZqtUIQBGMJuVyOxOPxP5UQCAS\u002BX2O1WmXqd7LZLFOfTpBOpwnP88xrTalUgsfjMZYgSRIRRZG\u002BsuaY4HaPwOv1DqrOnT7ToEe1dl02Rfsj86q9UQ/AB7\u002BMoBmsMsu/AAAAAElFTkSuQmCC",
+              "WhenOpened": "2025-10-27T06:59:06.3Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "ApiRender.py",
+              "DocumentMoniker": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\ApiRender.py",
+              "RelativeDocumentMoniker": "ApiRender.py",
+              "ToolTip": "C:\\Users\\noner\\OneDrive\\Escritorio\\ApiRender\\ApiRender.py",
+              "RelativeToolTip": "ApiRender.py",
+              "ViewState": "AgIAAAwAAAAAAAAAAAAAACQAAAASAAAAAAAAAA==",
+              "Icon": "00000000-0000-0000-0000-000000000000.000000|iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAAXNSR0IArs4c6QAAAARnQU1BAACxjwv8YQUAAAAJcEhZcwAADsMAAA7DAcdvqGQAAAG9SURBVDhPlZPPSwJBFMe/Vu76o8DVgqKiyINWGAiZXaJTt24S2KFzEP0BQdClc8euXToE3cJLeA36ASKULmxEGlFC/iBDY1utpt3ZUdtKqw885vtm37yZ92bWBCNtqnWz8Suyak\u002B6ZBBCmKIMZzIZopl0lSKTi\u002BtU1ywSiWjBY3pog/pO5XI5rY2vb\u002B/YO77BhN\u002BPubVd\u002Bk3DbDYjmUyKqjQkqSeQZRkHRwmEt09weH6Pi9sizFY7\u002BsQw/c5xHOx2\u002B7ck9R7k83kyvbSB/uA8FpVVzA6kMDIeAvd4ituJqJpMYJGAxWKB0\u002Bmkaw3N2tlcwfNDCssLQ/D6p8C9XqotnUQ738UidEymRu872Egn5cI9wu4XwNULvDwDnVVsRWeAs30WBfh8PgSDQeZ9KqFQKBBFUahWShkUr6NwjYbQ8WV3DZvNBofDQdcaEsRiMSQSCTbzM7UT1BL89GD\u002BRf0E2i1UKhXmtcZqtUIQBGMJuVyOxOPxP5UQCAS\u002BX2O1WmXqd7LZLFOfTpBOpwnP88xrTalUgsfjMZYgSRIRRZG\u002BsuaY4HaPwOv1DqrOnT7ToEe1dl02Rfsj86q9UQ/AB7\u002BMoBmsMsu/AAAAAElFTkSuQmCC",
+              "WhenOpened": "2025-10-27T06:33:51.778Z",
+              "EditorCaption": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

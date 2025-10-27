@@ -1,0 +1,13 @@
+# Ignorar entorno virtual
+venv/
+
+# Ignorar archivos temporales de Python
+__pycache__/
+
+# Ignorar archivos de Visual Studio
+*.pyproj
+*.sln
+
+# Ignorar otros posibles temporales
+*.log
+*.env
