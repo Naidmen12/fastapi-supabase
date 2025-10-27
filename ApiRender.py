@@ -1,21 +1,18 @@
 # ApiRender.py
 import os
+import traceback
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.exc import OperationalError
-from db import obtener_bd, Base, motor
+from db import obtener_bd, Base, engine  # engine si lo necesitas
 from models import Usuario
 from schemas import PeticionInicio, RespuestaUsuario
 
 app = FastAPI()
 
-@app.on_event("startup")
-def on_startup():
-    try:
-        Base.metadata.create_all(bind=motor)
-        print("Tablas creadas / DB OK")
-    except Exception as e:
-        # Registra y continúa; la app responderá pero endpoints que usen DB devolverán 503.
-        print("No se pudo conectar a la DB en startup:", e)
+# NOTA: quitar create_all del startup en producción si la DB puede no estar disponible.
+# Si quieres mantenerlo, hacerlo con cuidado (o en background con retry) — aquí lo removemos
+# para evitar bloquear el arranque si la DB no responde.
+# Alternativa: hacer create_all en un job separado o localmente durante despliegue.
 
 @app.get("/")
 def raiz():
@@ -29,21 +26,25 @@ def login(datos: PeticionInicio, db = Depends(obtener_bd)):
             Usuario.rol == datos.rol
         ).first()
     except OperationalError as e:
-        # DB inaccesible: devolver 503 para que el cliente reintente
+        # Log completo para diagnósticos y devuelve 503 inmediatamente
         print("OperationalError al consultar la BD:", e)
+        traceback.print_exc()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible. Intente más tarde.")
+    except Exception as e:
+        # otros errores
+        print("Error al consultar la BD:", e)
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Error interno")
 
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    # Para producción: usar verify de passlib contra el hash (aquí asumo texto para pruebas)
     if usuario.rol == "profesor":
         if not datos.clave or datos.clave != usuario.clave_hash:
             raise HTTPException(status_code=401, detail="Clave incorrecta")
 
     return usuario
 
-# Si ejecutas uvicorn directamente desde aquí, respeta $PORT
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
