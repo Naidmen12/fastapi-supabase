@@ -1,4 +1,5 @@
-from pydantic.v1 import BaseModel  # Compatibilidad v1 para orm_mode
+# schemas.py
+from pydantic.v1 import BaseModel  # si necesitas compatibilidad v1
 from typing import Optional
 
 class PeticionInicio(BaseModel):
