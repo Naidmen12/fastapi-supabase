@@ -1,5 +1,5 @@
 # schemas.py
-from pydantic.v1 import BaseModel  # si necesitas compatibilidad v1
+from pydantic.v1 import BaseModel  # compatibilidad v1
 from typing import Optional
 
 class PeticionInicio(BaseModel):
