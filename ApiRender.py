@@ -3,42 +3,46 @@ import os
 import traceback
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.exc import OperationalError
-from db import obtener_bd, engine
+from db import obtener_bd, engine, SessionLocal
 from models import Usuario
 from schemas import PeticionInicio, RespuestaUsuario
-from sqlalchemy.orm import sessionmaker
 
-SesionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-app = FastAPI()
+app = FastAPI(title="FastAPI - Identificación (Railway)")
 
 # Endpoint raíz
 @app.get("/")
 def raiz():
     return {"mensaje": "API funcionando correctamente"}
 
-# Endpoint de test de la DB (temporal)
+# Endpoint de test de la DB (temporal): verifica la conectividad desde Railway
 @app.get("/test-db")
 def test_db():
+    db = None
     try:
-        db = next(SesionLocal())
-        res = db.execute("SELECT * FROM usuarios LIMIT 1").fetchall()
-        return {"ok": True, "usuarios": [dict(u) for u in res]}
+        db = next(obtener_bd())
+        # consulta ligera para comprobar la conexión
+        row = db.execute("SELECT 1").fetchone()
+        return {"ok": True, "result": row[0] if row else None}
     except Exception as e:
         traceback.print_exc()
         return {"ok": False, "error": str(e)}
     finally:
-        db.close()
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 # Endpoint login
 @app.post("/login", response_model=RespuestaUsuario)
-def login(datos: PeticionInicio, db=Depends(obtener_bd)):
+def login(datos: PeticionInicio, db = Depends(obtener_bd)):
     try:
         usuario = db.query(Usuario).filter(
             Usuario.codigo == datos.codigo,
             Usuario.rol == datos.rol
         ).first()
     except OperationalError as e:
+        # error de conexión con la BD (timed out, network unreachable, etc.)
         print("OperationalError al consultar la BD:", e)
         traceback.print_exc()
         raise HTTPException(
