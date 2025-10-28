@@ -3,35 +3,49 @@ import os
 import traceback
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.exc import OperationalError
-from db import obtener_bd, Base, engine  # engine si lo necesitas
+from db import obtener_bd, engine
 from models import Usuario
 from schemas import PeticionInicio, RespuestaUsuario
+from sqlalchemy.orm import sessionmaker
+
+SesionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 app = FastAPI()
 
-# NOTA: quitar create_all del startup en producción si la DB puede no estar disponible.
-# Si quieres mantenerlo, hacerlo con cuidado (o en background con retry) — aquí lo removemos
-# para evitar bloquear el arranque si la DB no responde.
-# Alternativa: hacer create_all en un job separado o localmente durante despliegue.
-
+# Endpoint raíz
 @app.get("/")
 def raiz():
     return {"mensaje": "API funcionando correctamente"}
 
+# Endpoint de test de la DB (temporal)
+@app.get("/test-db")
+def test_db():
+    try:
+        db = next(SesionLocal())
+        res = db.execute("SELECT * FROM usuarios LIMIT 1").fetchall()
+        return {"ok": True, "usuarios": [dict(u) for u in res]}
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "error": str(e)}
+    finally:
+        db.close()
+
+# Endpoint login
 @app.post("/login", response_model=RespuestaUsuario)
-def login(datos: PeticionInicio, db = Depends(obtener_bd)):
+def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
         usuario = db.query(Usuario).filter(
             Usuario.codigo == datos.codigo,
             Usuario.rol == datos.rol
         ).first()
     except OperationalError as e:
-        # Log completo para diagnósticos y devuelve 503 inmediatamente
         print("OperationalError al consultar la BD:", e)
         traceback.print_exc()
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible. Intente más tarde.")
+        raise HTTPException(
+            status_code=503,
+            detail="Servicio de base de datos no disponible. Intente más tarde."
+        )
     except Exception as e:
-        # otros errores
         print("Error al consultar la BD:", e)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno")
@@ -45,6 +59,7 @@ def login(datos: PeticionInicio, db = Depends(obtener_bd)):
 
     return usuario
 
+# Run local (solo para debug)
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
