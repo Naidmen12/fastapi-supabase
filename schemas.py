@@ -1,16 +1,16 @@
 # schemas.py
-from pydantic.v1 import BaseModel  # usando compat v1 para orm_mode
+from pydantic import BaseModel
 from typing import Optional
 
 class PeticionInicio(BaseModel):
     rol: str
-    codigo: int
+    codigo: str                   # string para conservar ceros a la izquierda
     clave: Optional[str] = None
 
 class RespuestaUsuario(BaseModel):
     id: int
     rol: str
-    codigo: int
+    codigo: str
 
     class Config:
         orm_mode = True
