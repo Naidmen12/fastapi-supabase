@@ -22,6 +22,10 @@ def raiz():
 async def health():
     return PlainTextResponse("OK", status_code=200)
 
+@app.head("/health")
+async def health_head():
+    return PlainTextResponse(status_code=200)
+
 # Endpoint de test de la DB (temporal): verifica la conectividad desde Render
 @app.get("/test-db")
 def test_db():
