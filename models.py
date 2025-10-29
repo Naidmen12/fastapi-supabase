@@ -8,8 +8,11 @@ class Usuario(Base):
     id = Column(Integer, primary_key=True, index=True)            # 1,2,3...
     rol = Column(String(32), nullable=False)                      # 'Estudiante' / 'Profesor'
     codigo = Column(String(64), unique=True, nullable=False, index=True)  # TEXT para mantener ceros
-    clave = Column(Text, nullable=True)                           # contraseña en texto plano
+    clave = Column(Text, nullable=True)                           # contraseña en texto plano o hash bcrypt
     creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f"<Usuario id={self.id} codigo={self.codigo} rol={self.rol}>"
 
 class Recurso(Base):
     __tablename__ = "recursos"
