@@ -4,18 +4,19 @@ import traceback
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.exc import OperationalError
 from sqlalchemy import text
-from db import obtener_bd, engine, SessionLocal
+from db import obtener_bd
 from models import Usuario
 from schemas import PeticionInicio, RespuestaUsuario
+from passlib.hash import bcrypt
 
-app = FastAPI(title="FastAPI - Identificación (Railway)")
+app = FastAPI(title="FastAPI - Identificación (Render)")
 
 # Endpoint raíz
 @app.get("/")
 def raiz():
     return {"mensaje": "API funcionando correctamente"}
 
-# Endpoint de test de la DB (temporal): verifica la conectividad desde Railway
+# Endpoint de test de la DB (temporal): verifica la conectividad desde Render
 @app.get("/test-db")
 def test_db():
     db = None
@@ -60,8 +61,18 @@ def login(datos: PeticionInicio, db = Depends(obtener_bd)):
 
     # Normalizamos el rol para evitar problemas con mayúsculas/minúsculas
     if (usuario.rol or "").lower() == "profesor":
-        if not datos.clave or datos.clave != (usuario.clave or ""):
-            raise HTTPException(status_code=401, detail="Clave incorrecta")
+        # Recomendado: almacenar claves con bcrypt. Aquí soportamos ambos:
+        if not datos.clave:
+            raise HTTPException(status_code=401, detail="Clave requerida")
+        stored = usuario.clave or ""
+        if stored.startswith("$2a$") or stored.startswith("$2b$") or stored.startswith("$2y$"):
+            # parece ser bcrypt
+            if not bcrypt.verify(datos.clave, stored):
+                raise HTTPException(status_code=401, detail="Clave incorrecta")
+        else:
+            # compatibilidad con texto plano (solo temporal)
+            if datos.clave != stored:
+                raise HTTPException(status_code=401, detail="Clave incorrecta")
 
     # Para estudiantes no se requiere clave (según tu diseño)
     return usuario
