@@ -3,12 +3,17 @@ import os
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy import text
 
-# Railway (o cualquier PaaS) suele proporcionar DATABASE_URL en las env vars
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Recomendación: define DATABASE_URL en las environment variables de Render
+# Ejemplo (no lo dejes en el repo): postgresql://postgres:kabuto25@db.bhjwebapcuwqhtmdrxop.supabase.co:5432/postgres
+
+# Preferimos la variable de entorno; si no está (desarrollo), usamos el fallback que me diste:
+DEFAULT_FALLBACK = "postgresql://postgres:kabuto25@db.bhjwebapcuwqhtmdrxop.supabase.co:5432/postgres"
+
+DATABASE_URL = os.getenv("DATABASE_URL", DEFAULT_FALLBACK)
+
 if not DATABASE_URL:
-    raise RuntimeError("DATABASE_URL no está definida. Configure la variable de entorno en Railway.")
+    raise RuntimeError("DATABASE_URL no está definida. Configure la variable de entorno en Render.")
 
 # Forzar sslmode=require si no viene en la URL (útil para conexiones remotas)
 if "sslmode" not in DATABASE_URL:
