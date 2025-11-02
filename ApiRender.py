@@ -112,42 +112,82 @@ def actualizar_usuario(
     db=Depends(obtener_bd),
 ):
     try:
+        print("DEBUG actualizar_usuario inicio. usuario_id:", usuario_id)
+
         item = db.query(Usuario).filter(Usuario.id == usuario_id).first()
         if not item:
+            print("DEBUG actualizar_usuario: usuario no encontrado id:", usuario_id)
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-        # compatibilidad pydantic v2 => model_dump, si v1 usa dict()
-        data = {}
+        # extraer datos del payload (compatible pydantic v1/v2)
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(exclude_unset=True)
         else:
             data = payload.dict(exclude_unset=True)
 
-        if "clave" in data and data["clave"] is not None:
-            data["clave"] = bcrypt.hash(data["clave"])
+        print("DEBUG actualizar_usuario payload data:", data)
 
+        # impedir actualizar campos no permitidos
+        for forbidden in ("id", "creado_en"):
+            if forbidden in data:
+                print(f"DEBUG actualizar_usuario: removiendo campo protegido {forbidden}")
+                data.pop(forbidden, None)
+
+        # si actualizan clave, hash con proteccion
+        if "clave" in data and data["clave"] is not None:
+            try:
+                # asegurar que sea string simple
+                clave_val = data["clave"]
+                if not isinstance(clave_val, str):
+                    clave_val = str(clave_val)
+                data["clave"] = bcrypt.hash(clave_val)
+            except Exception as e:
+                print("DEBUG actualizar_usuario: error al hashear clave:", repr(e))
+                traceback.print_exc()
+                # no continuar si el hash falla
+                raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
+
+        # si cambian codigo, verificar colision con otro registro
         if "codigo" in data and data["codigo"] != item.codigo:
             collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
             if collision:
+                print("DEBUG actualizar_usuario: colision codigo:", data["codigo"])
                 raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
 
+        # aplicar cambios en el objeto
         for k, v in data.items():
+            # seguridad: evitar asignar atributos no existentes
+            if not hasattr(item, k):
+                print("DEBUG actualizar_usuario: atributo no existe en modelo, se omite:", k)
+                continue
             setattr(item, k, v)
 
         db.add(item)
         db.commit()
         db.refresh(item)
+        print("DEBUG actualizar_usuario: commit ok, id:", item.id)
         return item
-    except OperationalError:
-        traceback.print_exc()
-        db.rollback()
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+
     except HTTPException:
         raise
-    except Exception:
+    except OperationalError as e:
+        print("DEBUG actualizar_usuario OperationalError:", repr(e))
         traceback.print_exc()
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Error interno al actualizar usuario")
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except Exception as e:
+        # log completo para debug
+        print("DEBUG actualizar_usuario Exception:", repr(e))
+        traceback.print_exc()
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        # devolver detalle temporal para debug
+        raise HTTPException(status_code=500, detail=f"Error interno al actualizar usuario: {str(e)}")
 
 @app.delete("/usuarios/{usuario_id}", response_model=dict)
 def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
@@ -167,7 +207,7 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
-# --- Recursos (mantengo tu lógica, con validación mínima) ---
+# --- Recursos (mantengo tu logica, con validacion minima) ---
 @app.get("/recursos", response_model=List[RecursoOut])
 def listar_recursos(db=Depends(obtener_bd)):
     try:
@@ -183,13 +223,13 @@ def listar_recursos(db=Depends(obtener_bd)):
 @app.post("/recursos", response_model=RecursoOut)
 def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
     try:
-        # validación: al menos ruta o url_youtube
+        # validacion: al menos ruta o url_youtube
         if not payload.ruta and not payload.url_youtube:
             raise HTTPException(status_code=400, detail="Debe proporcionar 'ruta' (archivo) o 'url_youtube'")
 
         if payload.url_youtube:
             if "youtube.com" not in payload.url_youtube and "youtu.be" not in payload.url_youtube:
-                raise HTTPException(status_code=400, detail="url_youtube no parece una URL de YouTube válida")
+                raise HTTPException(status_code=400, detail="url_youtube no parece una URL de YouTube valida")
 
         nuevo = Recurso(
             titulo=payload.titulo,
@@ -262,7 +302,7 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
 
-# --- Login (mantengo tu lógica) ---
+# --- Login (mantengo tu logica) ---
 @app.post("/login", response_model=RespuestaUsuario)
 def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
