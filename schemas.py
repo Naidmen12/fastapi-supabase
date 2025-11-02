@@ -1,4 +1,4 @@
-# schemas.py
+# schemas.py (añadir estas clases)
 from pydantic import BaseModel
 from typing import Optional
 
@@ -14,7 +14,18 @@ class RespuestaUsuario(BaseModel):
 
     model_config = {"from_attributes": True}
 
-# schemas para Recurso
+# --- Usuario create/update ---
+class UsuarioCreate(BaseModel):
+    rol: str
+    codigo: str
+    clave: Optional[str] = None
+
+class UsuarioUpdate(BaseModel):
+    rol: Optional[str] = None
+    codigo: Optional[str] = None
+    clave: Optional[str] = None
+
+# --- Recurso (ya lo tenías) ---
 class RecursoBase(BaseModel):
     titulo: str
     tipo: str
