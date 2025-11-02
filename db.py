@@ -11,7 +11,7 @@ if not DATABASE_URL:
         "DATABASE_URL no esta definida. Configure la variable DATABASE_URL en Render."
     )
 
-# forzar sslmode=require si no viene en la URL
+# asegurar sslmode
 if "sslmode" not in DATABASE_URL:
     if "?" in DATABASE_URL:
         DATABASE_URL += "&sslmode=require"
@@ -33,4 +33,7 @@ def obtener_bd():
     try:
         yield db
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass
