@@ -2,7 +2,7 @@
 import os
 import traceback
 from typing import List
-from fastapi import FastAPI, Depends, HTTPException, Body, Path, UploadFile, File
+from fastapi import FastAPI, Depends, HTTPException, Body, Path
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
@@ -21,7 +21,7 @@ from passlib.hash import bcrypt
 
 app = FastAPI(title="FastAPI - Identificacion (Render)")
 
-# --- Root / health ---
+# raiz y health
 @app.get("/", include_in_schema=False)
 def raiz_get():
     return {"mensaje": "API funcionando correctamente"}
@@ -38,7 +38,7 @@ async def health():
 async def health_head():
     return PlainTextResponse(status_code=200)
 
-# --- Test DB ---
+# test DB
 @app.get("/test-db")
 def test_db():
     db = None
@@ -56,7 +56,7 @@ def test_db():
             except Exception:
                 pass
 
-# --- Usuarios ---
+# usuarios
 @app.get("/usuarios", response_model=List[RespuestaUsuario])
 def listar_usuarios(db=Depends(obtener_bd)):
     try:
@@ -72,7 +72,6 @@ def listar_usuarios(db=Depends(obtener_bd)):
 @app.post("/usuarios", response_model=RespuestaUsuario, status_code=201)
 def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
     try:
-        # evitar codigo duplicado
         existing = db.query(Usuario).filter(Usuario.codigo == payload.codigo).first()
         if existing:
             raise HTTPException(status_code=400, detail="Codigo ya registrado")
@@ -112,82 +111,52 @@ def actualizar_usuario(
     db=Depends(obtener_bd),
 ):
     try:
-        print("DEBUG actualizar_usuario inicio. usuario_id:", usuario_id)
-
         item = db.query(Usuario).filter(Usuario.id == usuario_id).first()
         if not item:
-            print("DEBUG actualizar_usuario: usuario no encontrado id:", usuario_id)
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-        # extraer datos del payload (compatible pydantic v1/v2)
+        # obtener datos (compatible pydantic v1/v2)
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(exclude_unset=True)
         else:
             data = payload.dict(exclude_unset=True)
 
-        print("DEBUG actualizar_usuario payload data:", data)
+        # no permitir campos protegidos
+        data.pop("id", None)
+        data.pop("creado_en", None)
 
-        # impedir actualizar campos no permitidos
-        for forbidden in ("id", "creado_en"):
-            if forbidden in data:
-                print(f"DEBUG actualizar_usuario: removiendo campo protegido {forbidden}")
-                data.pop(forbidden, None)
-
-        # si actualizan clave, hash con proteccion
+        # hash de clave si viene
         if "clave" in data and data["clave"] is not None:
-            try:
-                # asegurar que sea string simple
-                clave_val = data["clave"]
-                if not isinstance(clave_val, str):
-                    clave_val = str(clave_val)
-                data["clave"] = bcrypt.hash(clave_val)
-            except Exception as e:
-                print("DEBUG actualizar_usuario: error al hashear clave:", repr(e))
-                traceback.print_exc()
-                # no continuar si el hash falla
-                raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
+            # asegurar string
+            if not isinstance(data["clave"], str):
+                data["clave"] = str(data["clave"])
+            data["clave"] = bcrypt.hash(data["clave"])
 
-        # si cambian codigo, verificar colision con otro registro
+        # si cambian codigo, verificar colision
         if "codigo" in data and data["codigo"] != item.codigo:
             collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
             if collision:
-                print("DEBUG actualizar_usuario: colision codigo:", data["codigo"])
                 raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
 
-        # aplicar cambios en el objeto
+        # aplicar cambios
         for k, v in data.items():
-            # seguridad: evitar asignar atributos no existentes
-            if not hasattr(item, k):
-                print("DEBUG actualizar_usuario: atributo no existe en modelo, se omite:", k)
-                continue
-            setattr(item, k, v)
+            if hasattr(item, k):
+                setattr(item, k, v)
 
         db.add(item)
         db.commit()
         db.refresh(item)
-        print("DEBUG actualizar_usuario: commit ok, id:", item.id)
         return item
-
+    except OperationalError:
+        traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
-    except OperationalError as e:
-        print("DEBUG actualizar_usuario OperationalError:", repr(e))
+    except Exception:
         traceback.print_exc()
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
-    except Exception as e:
-        # log completo para debug
-        print("DEBUG actualizar_usuario Exception:", repr(e))
-        traceback.print_exc()
-        try:
-            db.rollback()
-        except Exception:
-            pass
-        # devolver detalle temporal para debug
-        raise HTTPException(status_code=500, detail=f"Error interno al actualizar usuario: {str(e)}")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error interno al actualizar usuario")
 
 @app.delete("/usuarios/{usuario_id}", response_model=dict)
 def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
@@ -207,7 +176,7 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
-# --- Recursos (mantengo tu logica, con validacion minima) ---
+# recursos
 @app.get("/recursos", response_model=List[RecursoOut])
 def listar_recursos(db=Depends(obtener_bd)):
     try:
@@ -223,10 +192,8 @@ def listar_recursos(db=Depends(obtener_bd)):
 @app.post("/recursos", response_model=RecursoOut)
 def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
     try:
-        # validacion: al menos ruta o url_youtube
         if not payload.ruta and not payload.url_youtube:
             raise HTTPException(status_code=400, detail="Debe proporcionar 'ruta' (archivo) o 'url_youtube'")
-
         if payload.url_youtube:
             if "youtube.com" not in payload.url_youtube and "youtu.be" not in payload.url_youtube:
                 raise HTTPException(status_code=400, detail="url_youtube no parece una URL de YouTube valida")
@@ -262,13 +229,13 @@ def actualizar_recurso(
         item = db.query(Recurso).filter(Recurso.id == recurso_id).first()
         if not item:
             raise HTTPException(status_code=404, detail="Recurso no encontrado")
-        data = {}
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(exclude_unset=True)
         else:
             data = payload.dict(exclude_unset=True)
         for k, v in data.items():
-            setattr(item, k, v)
+            if hasattr(item, k):
+                setattr(item, k, v)
         db.add(item)
         db.commit()
         db.refresh(item)
@@ -302,7 +269,7 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
 
-# --- Login (mantengo tu logica) ---
+# login
 @app.post("/login", response_model=RespuestaUsuario)
 def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
@@ -312,11 +279,9 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
             .first()
         )
     except OperationalError as e:
-        print("OperationalError al consultar la BD:", e)
         traceback.print_exc()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
-    except Exception as e:
-        print("Error al consultar la BD:", e)
+    except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno")
 
