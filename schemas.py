@@ -14,7 +14,7 @@ class RespuestaUsuario(BaseModel):
 
     model_config = {"from_attributes": True}
 
-# --- Usuario create/update ---
+# Usuario create/update
 class UsuarioCreate(BaseModel):
     rol: str
     codigo: str
@@ -25,7 +25,7 @@ class UsuarioUpdate(BaseModel):
     codigo: Optional[str] = None
     clave: Optional[str] = None
 
-# --- Recurso ---
+# Recurso
 class RecursoBase(BaseModel):
     titulo: str
     tipo: str
