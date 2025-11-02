@@ -1,4 +1,4 @@
-# schemas.py (añadir estas clases)
+# schemas.py
 from pydantic import BaseModel
 from typing import Optional
 
@@ -25,7 +25,7 @@ class UsuarioUpdate(BaseModel):
     codigo: Optional[str] = None
     clave: Optional[str] = None
 
-# --- Recurso (ya lo tenías) ---
+# --- Recurso ---
 class RecursoBase(BaseModel):
     titulo: str
     tipo: str
