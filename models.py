@@ -5,10 +5,10 @@ from db import Base
 
 class Usuario(Base):
     __tablename__ = "usuarios"
-    id = Column(Integer, primary_key=True, index=True)            # 1,2,3...
-    rol = Column(String(32), nullable=False)                      # 'Estudiante' / 'Profesor'
-    codigo = Column(String(64), unique=True, nullable=False, index=True)  # TEXT para mantener ceros
-    clave = Column(Text, nullable=True)                           # contraseña en texto plano o hash bcrypt
+    id = Column(Integer, primary_key=True, index=True)
+    rol = Column(String(32), nullable=False)
+    codigo = Column(String(64), unique=True, nullable=False, index=True)
+    clave = Column(Text, nullable=True)
     creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     def __repr__(self):
