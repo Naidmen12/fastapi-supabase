@@ -17,9 +17,12 @@ from schemas import (
     RecursoUpdate,
     RecursoOut,
 )
-from passlib.hash import bcrypt
+from passlib.context import CryptContext
 
 app = FastAPI(title="FastAPI - Identificacion (Render)")
+
+# password context: usa bcrypt y admite fallback seguro
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 # raiz y health
 @app.get("/", include_in_schema=False)
@@ -72,13 +75,21 @@ def listar_usuarios(db=Depends(obtener_bd)):
 @app.post("/usuarios", response_model=RespuestaUsuario, status_code=201)
 def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
     try:
+        # evitar codigo duplicado
         existing = db.query(Usuario).filter(Usuario.codigo == payload.codigo).first()
         if existing:
             raise HTTPException(status_code=400, detail="Codigo ya registrado")
 
         clave_to_store = None
         if payload.clave:
-            clave_to_store = bcrypt.hash(payload.clave)
+            try:
+                # asegurar string y hashear con passlib CryptContext
+                clave_str = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
+                clave_to_store = pwd_context.hash(clave_str)
+            except Exception as e:
+                traceback.print_exc()
+                # falla el hash: no continuar
+                raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
 
         nuevo = Usuario(
             rol=payload.rol,
@@ -127,10 +138,13 @@ def actualizar_usuario(
 
         # hash de clave si viene
         if "clave" in data and data["clave"] is not None:
-            # asegurar string
-            if not isinstance(data["clave"], str):
-                data["clave"] = str(data["clave"])
-            data["clave"] = bcrypt.hash(data["clave"])
+            try:
+                if not isinstance(data["clave"], str):
+                    data["clave"] = str(data["clave"])
+                data["clave"] = pwd_context.hash(data["clave"])
+            except Exception as e:
+                traceback.print_exc()
+                raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
 
         # si cambian codigo, verificar colision
         if "codigo" in data and data["codigo"] != item.codigo:
@@ -292,12 +306,19 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
         if not datos.clave:
             raise HTTPException(status_code=401, detail="Clave requerida")
         stored = usuario.clave or ""
-        if stored.startswith("$2a$") or stored.startswith("$2b$") or stored.startswith("$2y$"):
-            if not bcrypt.verify(datos.clave, stored):
-                raise HTTPException(status_code=401, detail="Clave incorrecta")
+        verified = False
+        # intentar verificar con passlib; si falla, fallback a comparacion directa
+        if stored:
+            try:
+                verified = pwd_context.verify(datos.clave, stored)
+            except Exception:
+                # fallback: comparar texto plano (si por algun motivo se guardo asi)
+                verified = (datos.clave == stored)
         else:
-            if datos.clave != stored:
-                raise HTTPException(status_code=401, detail="Clave incorrecta")
+            verified = False
+
+        if not verified:
+            raise HTTPException(status_code=401, detail="Clave incorrecta")
 
     return usuario
 
