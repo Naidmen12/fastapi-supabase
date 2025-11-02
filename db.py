@@ -8,11 +8,10 @@ DATABASE_URL = os.environ.get("DATABASE_URL")
 
 if not DATABASE_URL:
     raise RuntimeError(
-        "DATABASE_URL no está definida. Configure la variable 'DATABASE_URL' en Render (Environment → Add Variable). "
-        "Usa la connection string del pooler (Supavisor) o la IPv4 add-on de Supabase."
+        "DATABASE_URL no esta definida. Configure la variable DATABASE_URL en Render."
     )
 
-# Forzar sslmode=require si no viene en la URL
+# forzar sslmode=require si no viene en la URL
 if "sslmode" not in DATABASE_URL:
     if "?" in DATABASE_URL:
         DATABASE_URL += "&sslmode=require"
@@ -22,11 +21,12 @@ if "sslmode" not in DATABASE_URL:
 engine = create_engine(
     DATABASE_URL,
     pool_pre_ping=True,
-    connect_args={"connect_timeout": 5}
+    connect_args={"connect_timeout": 5},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
+
 
 def obtener_bd():
     db = SessionLocal()
