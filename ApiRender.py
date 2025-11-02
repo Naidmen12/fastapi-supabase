@@ -23,8 +23,27 @@ app = FastAPI(title="FastAPI - Identificacion (Render)")
 
 # password context: usa bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-# si quieres probar sin hashear pone en Render env SKIP_HASH=1 (solo para debug)
+
+# si quieres probar sin hashear pon SKIP_HASH=1 en las env de Render (solo para debug)
 SKIP_HASH = os.environ.get("SKIP_HASH", "0") == "1"
+
+# helper: bcrypt limita a 72 bytes -> truncar consistentemente antes de hashear / verificar
+def normalize_password_for_bcrypt(raw: str) -> str:
+    if raw is None:
+        return raw
+    if not isinstance(raw, str):
+        raw = str(raw)
+    b = raw.encode("utf-8", errors="ignore")
+    if len(b) <= 72:
+        return raw
+    b2 = b[:72]
+    truncated = b2.decode("utf-8", errors="ignore")
+    return truncated
+
+def looks_like_bcrypt_hash(s: str) -> bool:
+    if not s or not isinstance(s, str):
+        return False
+    return s.startswith("$2a$") or s.startswith("$2b$") or s.startswith("$2y$")
 
 # raiz y health
 @app.get("/", include_in_schema=False)
@@ -83,13 +102,12 @@ def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
 
         clave_to_store = None
         if payload.clave:
-            # para debug temporal, puedes setear SKIP_HASH=1 en las env de Render
             if SKIP_HASH:
                 clave_to_store = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
             else:
                 try:
-                    clave_str = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
-                    clave_to_store = pwd_context.hash(clave_str)
+                    safe = normalize_password_for_bcrypt(payload.clave)
+                    clave_to_store = pwd_context.hash(safe)
                 except Exception as e:
                     traceback.print_exc()
                     raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
@@ -129,31 +147,35 @@ def actualizar_usuario(
         if not item:
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
+        # compatibilidad pydantic v1/v2
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(exclude_unset=True)
         else:
             data = payload.dict(exclude_unset=True)
 
+        # no permitir campos protegidos
         data.pop("id", None)
         data.pop("creado_en", None)
 
+        # procesar clave si viene
         if "clave" in data and data["clave"] is not None:
             if SKIP_HASH:
                 data["clave"] = data["clave"] if isinstance(data["clave"], str) else str(data["clave"])
             else:
                 try:
-                    if not isinstance(data["clave"], str):
-                        data["clave"] = str(data["clave"])
-                    data["clave"] = pwd_context.hash(data["clave"])
+                    safe = normalize_password_for_bcrypt(data["clave"])
+                    data["clave"] = pwd_context.hash(safe)
                 except Exception as e:
                     traceback.print_exc()
                     raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
 
+        # si cambian codigo, verificar colision
         if "codigo" in data and data["codigo"] != item.codigo:
             collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
             if collision:
                 raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
 
+        # aplicar cambios
         for k, v in data.items():
             if hasattr(item, k):
                 setattr(item, k, v)
@@ -306,12 +328,21 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     if (usuario.rol or "").lower() == "profesor":
         if not datos.clave:
             raise HTTPException(status_code=401, detail="Clave requerida")
+
         stored = usuario.clave or ""
         verified = False
+
         if stored:
-            try:
-                verified = pwd_context.verify(datos.clave, stored)
-            except Exception:
+            # si el valor almacenado parece ser un hash bcrypt, verificar con pwd_context
+            if looks_like_bcrypt_hash(stored):
+                try:
+                    candidate = normalize_password_for_bcrypt(datos.clave)
+                    verified = pwd_context.verify(candidate, stored)
+                except Exception:
+                    # fallback a comparacion directa si algo falla
+                    verified = (datos.clave == stored)
+            else:
+                # almacenado en texto plano, comparar directo
                 verified = (datos.clave == stored)
         else:
             verified = False
