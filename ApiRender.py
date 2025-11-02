@@ -21,8 +21,10 @@ from passlib.context import CryptContext
 
 app = FastAPI(title="FastAPI - Identificacion (Render)")
 
-# password context: usa bcrypt y admite fallback seguro
+# password context: usa bcrypt
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# si quieres probar sin hashear pone en Render env SKIP_HASH=1 (solo para debug)
+SKIP_HASH = os.environ.get("SKIP_HASH", "0") == "1"
 
 # raiz y health
 @app.get("/", include_in_schema=False)
@@ -75,21 +77,22 @@ def listar_usuarios(db=Depends(obtener_bd)):
 @app.post("/usuarios", response_model=RespuestaUsuario, status_code=201)
 def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
     try:
-        # evitar codigo duplicado
         existing = db.query(Usuario).filter(Usuario.codigo == payload.codigo).first()
         if existing:
             raise HTTPException(status_code=400, detail="Codigo ya registrado")
 
         clave_to_store = None
         if payload.clave:
-            try:
-                # asegurar string y hashear con passlib CryptContext
-                clave_str = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
-                clave_to_store = pwd_context.hash(clave_str)
-            except Exception as e:
-                traceback.print_exc()
-                # falla el hash: no continuar
-                raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
+            # para debug temporal, puedes setear SKIP_HASH=1 en las env de Render
+            if SKIP_HASH:
+                clave_to_store = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
+            else:
+                try:
+                    clave_str = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
+                    clave_to_store = pwd_context.hash(clave_str)
+                except Exception as e:
+                    traceback.print_exc()
+                    raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
 
         nuevo = Usuario(
             rol=payload.rol,
@@ -126,33 +129,31 @@ def actualizar_usuario(
         if not item:
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-        # obtener datos (compatible pydantic v1/v2)
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(exclude_unset=True)
         else:
             data = payload.dict(exclude_unset=True)
 
-        # no permitir campos protegidos
         data.pop("id", None)
         data.pop("creado_en", None)
 
-        # hash de clave si viene
         if "clave" in data and data["clave"] is not None:
-            try:
-                if not isinstance(data["clave"], str):
-                    data["clave"] = str(data["clave"])
-                data["clave"] = pwd_context.hash(data["clave"])
-            except Exception as e:
-                traceback.print_exc()
-                raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
+            if SKIP_HASH:
+                data["clave"] = data["clave"] if isinstance(data["clave"], str) else str(data["clave"])
+            else:
+                try:
+                    if not isinstance(data["clave"], str):
+                        data["clave"] = str(data["clave"])
+                    data["clave"] = pwd_context.hash(data["clave"])
+                except Exception as e:
+                    traceback.print_exc()
+                    raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
 
-        # si cambian codigo, verificar colision
         if "codigo" in data and data["codigo"] != item.codigo:
             collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
             if collision:
                 raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
 
-        # aplicar cambios
         for k, v in data.items():
             if hasattr(item, k):
                 setattr(item, k, v)
@@ -307,12 +308,10 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
             raise HTTPException(status_code=401, detail="Clave requerida")
         stored = usuario.clave or ""
         verified = False
-        # intentar verificar con passlib; si falla, fallback a comparacion directa
         if stored:
             try:
                 verified = pwd_context.verify(datos.clave, stored)
             except Exception:
-                # fallback: comparar texto plano (si por algun motivo se guardo asi)
                 verified = (datos.clave == stored)
         else:
             verified = False
