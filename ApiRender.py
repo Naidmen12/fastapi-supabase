@@ -112,8 +112,11 @@ def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
                     traceback.print_exc()
                     raise HTTPException(status_code=500, detail=f"Error al procesar clave: {str(e)}")
 
+        # payload.rol es un Enum (RoleEnum). Convertimos a string si tiene .value
+        rol_value = payload.rol.value if hasattr(payload.rol, "value") else payload.rol
+
         nuevo = Usuario(
-            rol=payload.rol,
+            rol=rol_value,
             codigo=payload.codigo,
             clave=clave_to_store,
         )
@@ -174,6 +177,10 @@ def actualizar_usuario(
             collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
             if collision:
                 raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
+
+        # si rol viene como Enum, convertir a string
+        if "rol" in data and data["rol"] is not None:
+            data["rol"] = data["rol"].value if hasattr(data["rol"], "value") else data["rol"]
 
         # aplicar cambios
         for k, v in data.items():
@@ -310,9 +317,12 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
 @app.post("/login", response_model=RespuestaUsuario)
 def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
+        # datos.rol puede ser un Enum; obtener el valor string si existe .value
+        rol_value = datos.rol.value if hasattr(datos.rol, "value") else datos.rol
+
         usuario = (
             db.query(Usuario)
-            .filter(Usuario.codigo == datos.codigo, Usuario.rol == datos.rol)
+            .filter(Usuario.codigo == datos.codigo, Usuario.rol == rol_value)
             .first()
         )
     except OperationalError as e:
@@ -325,7 +335,8 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    if (usuario.rol or "").lower() == "profesor":
+    # solo los Profesores requieren clave
+    if (rol_value or "").lower() == "profesor":
         if not datos.clave:
             raise HTTPException(status_code=401, detail="Clave requerida")
 
