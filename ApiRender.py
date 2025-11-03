@@ -77,10 +77,8 @@ def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
 
         clave_to_store = None
         if payload.clave is not None:
-            # Guardar tal cual (texto plano). Convertir a str por seguridad.
             clave_to_store = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
 
-        # payload.rol puede ser Enum; obtener string si tiene .value
         rol_value = payload.rol.value if hasattr(payload.rol, "value") else payload.rol
 
         nuevo = Usuario(
@@ -118,31 +116,25 @@ def actualizar_usuario(
         if not item:
             raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-        # compatibilidad pydantic v1/v2
         if hasattr(payload, "model_dump"):
             data = payload.model_dump(exclude_unset=True)
         else:
             data = payload.dict(exclude_unset=True)
 
-        # no permitir campos protegidos
         data.pop("id", None)
         data.pop("creado_en", None)
 
-        # procesar clave si viene: guardar en texto plano
         if "clave" in data and data["clave"] is not None:
             data["clave"] = data["clave"] if isinstance(data["clave"], str) else str(data["clave"])
 
-        # si cambian codigo, verificar colision
         if "codigo" in data and data["codigo"] != item.codigo:
             collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
             if collision:
                 raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
 
-        # si rol viene como Enum, convertir a string
         if "rol" in data and data["rol"] is not None:
             data["rol"] = data["rol"].value if hasattr(data["rol"], "value") else data["rol"]
 
-        # aplicar cambios
         for k, v in data.items():
             if hasattr(item, k):
                 setattr(item, k, v)
@@ -277,7 +269,6 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
 @app.post("/login", response_model=RespuestaUsuario)
 def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
-        # datos.rol puede ser un Enum; obtener el valor string si existe .value
         rol_value = datos.rol.value if hasattr(datos.rol, "value") else datos.rol
 
         usuario = (
@@ -295,19 +286,12 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     if not usuario:
         raise HTTPException(status_code=404, detail="Usuario no encontrado")
 
-    # solo los Profesores requieren clave
     if (rol_value or "").lower() == "profesor":
         if not datos.clave:
             raise HTTPException(status_code=401, detail="Clave requerida")
 
         stored = usuario.clave or ""
-        verified = False
-
-        if stored:
-            # Comparación directa en texto plano
-            verified = (datos.clave == stored)
-        else:
-            verified = False
+        verified = (datos.clave == stored)
 
         if not verified:
             raise HTTPException(status_code=401, detail="Clave incorrecta")
