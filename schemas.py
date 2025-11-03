@@ -1,4 +1,4 @@
-# schemas.py
+#schemas.py
 from pydantic import BaseModel
 from typing import Optional
 from enum import Enum as PyEnum
@@ -12,10 +12,12 @@ class PeticionInicio(BaseModel):
     codigo: str
     clave: Optional[str] = None
 
+# Respuesta de usuario incluyendo 'clave'
 class RespuestaUsuario(BaseModel):
     id: int
     rol: str
     codigo: str
+    clave: Optional[str] = None  # agregado para que la API devuelva la clave
 
     model_config = {"from_attributes": True}
 
