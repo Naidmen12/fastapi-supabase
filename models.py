@@ -1,12 +1,17 @@
 # models.py
 from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, TIMESTAMP
 from sqlalchemy.sql import func
+from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
 from db import Base
+
+# Definimos el ENUM de SQLAlchemy indicando create_type=False
+# porque el tipo role_type ya existe en la base de datos (Postgres enum).
+role_enum = PG_ENUM('Estudiante', 'Profesor', name='role_type', create_type=False)
 
 class Usuario(Base):
     __tablename__ = "usuarios"
     id = Column(Integer, primary_key=True, index=True)
-    rol = Column(String(32), nullable=False)
+    rol = Column(role_enum, nullable=False)  # usamos el ENUM mapeado a Postgres
     codigo = Column(String(64), unique=True, nullable=False, index=True)
     clave = Column(Text, nullable=True)
     creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
