@@ -1,9 +1,14 @@
 # schemas.py
 from pydantic import BaseModel
 from typing import Optional
+from enum import Enum as PyEnum
+
+class RoleEnum(str, PyEnum):
+    Estudiante = "Estudiante"
+    Profesor = "Profesor"
 
 class PeticionInicio(BaseModel):
-    rol: str
+    rol: RoleEnum
     codigo: str
     clave: Optional[str] = None
 
@@ -16,12 +21,12 @@ class RespuestaUsuario(BaseModel):
 
 # Usuario create/update
 class UsuarioCreate(BaseModel):
-    rol: str
+    rol: RoleEnum
     codigo: str
     clave: Optional[str] = None
 
 class UsuarioUpdate(BaseModel):
-    rol: Optional[str] = None
+    rol: Optional[RoleEnum] = None
     codigo: Optional[str] = None
     clave: Optional[str] = None
 
