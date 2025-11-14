@@ -5,10 +5,10 @@ import uuid
 import traceback
 import tempfile
 from typing import List, Optional
-from urllib.parse import urlparse
+from urllib.parse import urlparse, unquote
 
 from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
 
@@ -48,17 +48,33 @@ BUCKET_NAME = os.environ.get("SUPABASE_BUCKET", "pdf")  # default 'pdf'
 
 app = FastAPI(title="FastAPI - Identificacion (Render)")
 
+# ---- Handler global para debug (opcional) ----
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    # Imprimir traceback en logs
+    traceback.print_exc()
+    # Si activas DEBUG_SHOW_ERROR en variables de entorno, devolver el error en el body (solo para debug)
+    if os.environ.get("DEBUG_SHOW_ERROR", "false").lower() in ("1", "true", "yes"):
+        return JSONResponse(status_code=500, content={"error": str(exc)})
+    return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
 
 # ---------- helpers ----------
 def extract_path_from_supabase_public_url(url: str) -> Optional[str]:
+    """
+    Extrae la ruta relativa dentro del bucket desde una URL publica de Supabase.
+    Ejemplo:
+      https://xyz.supabase.co/storage/v1/object/public/pdf/dir/archivo.pdf?token=...
+      -> "dir/archivo.pdf"
+    """
     try:
         p = urlparse(url)
-        path = p.path
+        path = unquote(p.path or "")
         marker = "/storage/v1/object/public/"
         idx = path.find(marker)
         if idx == -1:
             return None
-        after = path[idx + len(marker):]
+        after = path[idx + len(marker):]  # e.g. "pdf/dir/file.pdf"
+        # si comienza con el nombre del bucket, quitarlo
         if after.startswith(BUCKET_NAME + "/"):
             return after[len(BUCKET_NAME) + 1:]
         return after
@@ -293,11 +309,11 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
 
-# ---------- recursos CRUD (modificados para usar columnas: titulo, tipo, ruta, url_youtube) ----------
+# ---------- recursos CRUD ----------
 @app.get("/recursos", response_model=List[RecursoOut])
 def listar_recursos(db=Depends(obtener_bd)):
     try:
-        q = text("SELECT id, titulo, tipo, ruta, url_youtube, creado_en FROM recursos ORDER BY id")
+        q = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos ORDER BY id")
         rows = db.execute(q).fetchall()
         result = []
         for r in rows:
@@ -306,7 +322,10 @@ def listar_recursos(db=Depends(obtener_bd)):
                 "titulo": r["titulo"],
                 "tipo": r["tipo"],
                 "ruta": r["ruta"],
+                "file_path": r["file_path"],
                 "url_youtube": r["url_youtube"],
+                "publico": bool(r["publico"]) if r["publico"] is not None else False,
+                "subido_por": r["subido_por"],
                 "creado_en": str(r["creado_en"]) if r["creado_en"] is not None else None
             })
         return result
@@ -327,16 +346,31 @@ def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
             if "youtube.com" not in payload.url_youtube and "youtu.be" not in payload.url_youtube:
                 raise HTTPException(status_code=400, detail="url_youtube no parece una URL de YouTube valida")
 
+        # intentar obtener file_path: si el cliente lo envio usarlo, si no intentar extraer desde la ruta publica
+        file_path_val = None
+        # si el schema incluye file_path, pydantic lo tendra en payload.__dict__ si lo envio
+        try:
+            if hasattr(payload, "file_path") and payload.file_path:
+                file_path_val = payload.file_path
+        except Exception:
+            pass
+
+        if not file_path_val and payload.ruta:
+            file_path_val = extract_path_from_supabase_public_url(payload.ruta)
+
         insert_sql = text("""
-            INSERT INTO recursos (titulo, tipo, ruta, url_youtube)
-            VALUES (:titulo, :tipo, :ruta, :url_youtube)
-            RETURNING id, titulo, tipo, ruta, url_youtube, creado_en
+            INSERT INTO recursos (titulo, tipo, ruta, file_path, url_youtube, publico, subido_por)
+            VALUES (:titulo, :tipo, :ruta, :file_path, :url_youtube, :publico, :subido_por)
+            RETURNING id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en
         """)
         params = {
             "titulo": payload.titulo,
             "tipo": payload.tipo,
             "ruta": payload.ruta,
-            "url_youtube": payload.url_youtube
+            "file_path": file_path_val,
+            "url_youtube": payload.url_youtube,
+            "publico": payload.publico,
+            "subido_por": payload.subido_por
         }
         row = db.execute(insert_sql, params).fetchone()
         db.commit()
@@ -347,7 +381,10 @@ def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
             "titulo": row["titulo"],
             "tipo": row["tipo"],
             "ruta": row["ruta"],
+            "file_path": row["file_path"],
             "url_youtube": row["url_youtube"],
+            "publico": bool(row["publico"]) if row["publico"] is not None else False,
+            "subido_por": row["subido_por"],
             "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
         }
     except OperationalError:
@@ -367,7 +404,7 @@ def actualizar_recurso(
     recurso_id: int = Path(...), payload: RecursoUpdate = Body(...), db=Depends(obtener_bd)
 ):
     try:
-        select_sql = text("SELECT id, titulo, tipo, ruta, url_youtube, creado_en FROM recursos WHERE id = :id")
+        select_sql = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos WHERE id = :id")
         existing = db.execute(select_sql, {"id": recurso_id}).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Recurso no encontrado")
@@ -377,7 +414,7 @@ def actualizar_recurso(
         else:
             data = payload.dict(exclude_unset=True)
 
-        allowed = {"titulo", "tipo", "ruta", "url_youtube"}
+        allowed = {"titulo", "tipo", "ruta", "file_path", "url_youtube", "publico", "subido_por"}
         updates = {k: v for k, v in data.items() if k in allowed}
 
         if not updates:
@@ -386,7 +423,10 @@ def actualizar_recurso(
                 "titulo": existing["titulo"],
                 "tipo": existing["tipo"],
                 "ruta": existing["ruta"],
+                "file_path": existing["file_path"],
                 "url_youtube": existing["url_youtube"],
+                "publico": bool(existing["publico"]) if existing["publico"] is not None else False,
+                "subido_por": existing["subido_por"],
                 "creado_en": str(existing["creado_en"]) if existing["creado_en"] is not None else None
             }
 
@@ -399,7 +439,7 @@ def actualizar_recurso(
             set_fragments.append(f"{k} = :{key}")
             params[key] = v
         set_sql = ", ".join(set_fragments)
-        update_sql = text(f"UPDATE recursos SET {set_sql} WHERE id = :id RETURNING id, titulo, tipo, ruta, url_youtube, creado_en")
+        update_sql = text(f"UPDATE recursos SET {set_sql} WHERE id = :id RETURNING id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en")
         row = db.execute(update_sql, params).fetchone()
         db.commit()
         if not row:
@@ -409,7 +449,10 @@ def actualizar_recurso(
             "titulo": row["titulo"],
             "tipo": row["tipo"],
             "ruta": row["ruta"],
+            "file_path": row["file_path"],
             "url_youtube": row["url_youtube"],
+            "publico": bool(row["publico"]) if row["publico"] is not None else False,
+            "subido_por": row["subido_por"],
             "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
         }
     except OperationalError:
@@ -427,19 +470,18 @@ def actualizar_recurso(
 @app.delete("/recursos/{recurso_id}", response_model=dict)
 def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
     try:
-        select_sql = text("SELECT ruta FROM recursos WHERE id = :id")
+        select_sql = text("SELECT ruta, file_path FROM recursos WHERE id = :id")
         existing = db.execute(select_sql, {"id": recurso_id}).fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Recurso no encontrado")
 
         ruta = existing["ruta"]
-        if ruta:
-            file_path = extract_path_from_supabase_public_url(ruta)
-            if file_path:
-                try:
-                    delete_file_from_supabase(file_path)
-                except HTTPException:
-                    traceback.print_exc()
+        file_path = existing["file_path"]
+        if file_path:
+            try:
+                delete_file_from_supabase(file_path)
+            except HTTPException:
+                traceback.print_exc()
 
         delete_sql = text("DELETE FROM recursos WHERE id = :id")
         db.execute(delete_sql, {"id": recurso_id})
@@ -464,7 +506,7 @@ async def upload_recurso_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
     try:
         raw = await file.read()
-        filename = f"{uuid.uuid4()}_{file.filename}"
+        filename = f"{uuid.uuid4().hex}_{file.filename}"
         dest_path = filename
 
         public_url = upload_bytes_to_supabase(raw, dest_path)
@@ -476,8 +518,9 @@ async def upload_recurso_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Error interno al subir archivo")
 
 
-@app.delete("/recursos/delete_file/{file_path}", response_model=dict)
-def delete_file_endpoint(file_path: str = Path(...)):
+# endpoint que acepta file_path con slashes
+@app.delete("/recursos/delete_file/{file_path:path}", response_model=dict)
+def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa dentro del bucket (puede contener /)")):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
     try:
@@ -488,6 +531,77 @@ def delete_file_endpoint(file_path: str = Path(...)):
     except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno al eliminar archivo")
+
+
+# ---------- upload + create (opcional, util para cliente) ----------
+@app.post("/recursos/upload_and_create", response_model=dict)
+async def upload_and_create_recurso(
+    titulo: str = Body(...),
+    publico: Optional[bool] = Body(False),
+    subido_por: Optional[int] = Body(None),
+    file: UploadFile = File(...),
+    db=Depends(obtener_bd),
+):
+    """
+    Sube el archivo al bucket y crea la fila en la tabla recursos.
+    Devuelve el registro insertado.
+    """
+    if not supabase:
+        raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
+    if not titulo or titulo.strip() == "":
+        raise HTTPException(status_code=400, detail="El campo 'titulo' es requerido.")
+
+    # leer bytes
+    try:
+        contenido = await file.read()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"No se pudo leer el archivo: {str(e)}")
+
+    # generar nombre en bucket
+    nombre = f"{uuid.uuid4().hex}_{file.filename}"
+
+    # subir al storage
+    try:
+        public = upload_bytes_to_supabase(contenido, nombre)
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
+
+    # insertar en DB
+    try:
+        insert_sql = text("""
+            INSERT INTO recursos (titulo, tipo, ruta, file_path, publico, subido_por)
+            VALUES (:titulo, 'pdf', :ruta, :file_path, :publico, :subido_por)
+            RETURNING id, titulo, tipo, ruta, file_path, publico, subido_por, creado_en
+        """)
+        params = {
+            "titulo": titulo,
+            "ruta": public,
+            "file_path": nombre,
+            "publico": publico,
+            "subido_por": subido_por
+        }
+        row = db.execute(insert_sql, params).fetchone()
+        db.commit()
+        if not row:
+            raise HTTPException(status_code=500, detail="No se pudo crear el registro en la base de datos.")
+        return {
+            "id": row["id"],
+            "titulo": row["titulo"],
+            "tipo": row["tipo"],
+            "ruta": row["ruta"],
+            "file_path": row["file_path"],
+            "publico": bool(row["publico"]) if row["publico"] is not None else False,
+            "subido_por": row["subido_por"],
+            "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        traceback.print_exc()
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error interno al crear el recurso: {str(e)}")
 
 
 # ---------- login (sin cambios) ----------
