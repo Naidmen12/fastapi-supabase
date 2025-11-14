@@ -1,4 +1,4 @@
-#schemas.py
+# schemas.py
 from pydantic import BaseModel
 from typing import Optional
 from enum import Enum as PyEnum
@@ -37,7 +37,9 @@ class RecursoBase(BaseModel):
     titulo: str
     tipo: str
     ruta: Optional[str] = None
+    file_path: Optional[str] = None
     url_youtube: Optional[str] = None
+    youtube_id: Optional[str] = None
     subido_por: Optional[int] = None
     publico: Optional[bool] = False
 
@@ -48,7 +50,9 @@ class RecursoUpdate(BaseModel):
     titulo: Optional[str] = None
     tipo: Optional[str] = None
     ruta: Optional[str] = None
+    file_path: Optional[str] = None
     url_youtube: Optional[str] = None
+    youtube_id: Optional[str] = None
     subido_por: Optional[int] = None
     publico: Optional[bool] = None
 
