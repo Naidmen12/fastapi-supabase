@@ -545,64 +545,92 @@ async def upload_and_create_recurso(
     """
     Sube el archivo al bucket y crea la fila en la tabla recursos.
     Devuelve el registro insertado.
+    - Si la insercion en DB falla, borra el archivo subido para evitar archivos huérfanos.
     """
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     if not titulo or titulo.strip() == "":
         raise HTTPException(status_code=400, detail="El campo 'titulo' es requerido.")
 
-    # leer bytes
+    nombre = None
     try:
-        contenido = await file.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"No se pudo leer el archivo: {str(e)}")
+        # leer bytes
+        try:
+            contenido = await file.read()
+        except Exception as e:
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"No se pudo leer el archivo: {str(e)}")
 
-    # generar nombre en bucket
-    nombre = f"{uuid.uuid4().hex}_{file.filename}"
+        # generar nombre en bucket
+        nombre = f"{uuid.uuid4().hex}_{file.filename}"
 
-    # subir al storage
-    try:
-        public = upload_bytes_to_supabase(contenido, nombre)
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
+        # subir al storage
+        try:
+            public = upload_bytes_to_supabase(contenido, nombre)
+        except HTTPException:
+            raise
+        except Exception as e:
+            traceback.print_exc()
+            raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
-    # insertar en DB
-    try:
-        insert_sql = text("""
-            INSERT INTO recursos (titulo, tipo, ruta, file_path, publico, subido_por)
-            VALUES (:titulo, 'pdf', :ruta, :file_path, :publico, :subido_por)
-            RETURNING id, titulo, tipo, ruta, file_path, publico, subido_por, creado_en
-        """)
-        params = {
-            "titulo": titulo,
-            "ruta": public,
-            "file_path": nombre,
-            "publico": publico,
-            "subido_por": subido_por
-        }
-        row = db.execute(insert_sql, params).fetchone()
-        db.commit()
-        if not row:
-            raise HTTPException(status_code=500, detail="No se pudo crear el registro en la base de datos.")
-        return {
-            "id": row["id"],
-            "titulo": row["titulo"],
-            "tipo": row["tipo"],
-            "ruta": row["ruta"],
-            "file_path": row["file_path"],
-            "publico": bool(row["publico"]) if row["publico"] is not None else False,
-            "subido_por": row["subido_por"],
-            "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        traceback.print_exc()
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Error interno al crear el recurso: {str(e)}")
+        # insertar en DB
+        try:
+            insert_sql = text("""
+                INSERT INTO recursos (titulo, tipo, ruta, file_path, publico, subido_por)
+                VALUES (:titulo, 'pdf', :ruta, :file_path, :publico, :subido_por)
+                RETURNING id, titulo, tipo, ruta, file_path, publico, subido_por, creado_en
+            """)
+            params = {
+                "titulo": titulo,
+                "ruta": public,
+                "file_path": nombre,
+                "publico": publico,
+                "subido_por": subido_por
+            }
+            row = db.execute(insert_sql, params).fetchone()
+            db.commit()
+            if not row:
+                # borrar archivo subido si la insercion no devolvio fila
+                try:
+                    delete_file_from_supabase(nombre)
+                except Exception:
+                    traceback.print_exc()
+                raise HTTPException(status_code=500, detail="No se pudo crear el registro en la base de datos.")
+
+            respuesta = {
+                "id": row["id"],
+                "titulo": row["titulo"],
+                "tipo": row["tipo"],
+                "ruta": row["ruta"],
+                "file_path": row["file_path"],
+                "publico": bool(row["publico"]) if row["publico"] is not None else False,
+                "subido_por": row["subido_por"],
+                "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
+            }
+            return respuesta
+
+        except HTTPException:
+            raise
+        except Exception as e:
+            traceback.print_exc()
+            # borrar el archivo subido para evitar huella
+            try:
+                if nombre:
+                    delete_file_from_supabase(nombre)
+            except Exception:
+                traceback.print_exc()
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            raise HTTPException(status_code=500, detail=f"Error interno al crear el recurso: {str(e)}")
+
+    finally:
+        # limpiar variables grandes
+        try:
+            contenido = None
+        except Exception:
+            pass
 
 
 # ---------- login (sin cambios) ----------
