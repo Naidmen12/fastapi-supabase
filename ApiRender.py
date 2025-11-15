@@ -297,7 +297,7 @@ def listar_recursos():
     try:
         db = next(obtener_bd())
         q = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos ORDER BY id")
-        rows = db.execute(q).fetchall()
+        rows = db.execute(q).mappings().all()
         result = []
         for r in rows:
             result.append({
@@ -361,7 +361,7 @@ def crear_recurso(payload: RecursoCreate = Body(...)):
             "publico": payload.publico,
             "subido_por": payload.subido_por
         }
-        row = db.execute(insert_sql, params).fetchone()
+        row = db.execute(insert_sql, params).mappings().fetchone()
         db.commit()
         if not row:
             raise HTTPException(status_code=500, detail="No se pudo crear el recurso")
@@ -370,21 +370,23 @@ def crear_recurso(payload: RecursoCreate = Body(...)):
             "titulo": row["titulo"],
             "tipo": row["tipo"],
             "ruta": row["ruta"],
-            "file_path": row["file_path"],
-            "url_youtube": row["url_youtube"],
+            "file_path": row.get("file_path"),
+            "url_youtube": row.get("url_youtube"),
             "publico": bool(row["publico"]) if row["publico"] is not None else False,
-            "subido_por": row["subido_por"],
+            "subido_por": row.get("subido_por"),
             "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
         }
     except OperationalError:
         traceback.print_exc()
-        db.rollback() if db else None
+        if db:
+            db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        db.rollback() if db else None
+        if db:
+            db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al crear recurso")
     finally:
         if db:
@@ -400,7 +402,7 @@ def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Bod
     try:
         db = next(obtener_bd())
         select_sql = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos WHERE id = :id")
-        existing = db.execute(select_sql, {"id": recurso_id}).fetchone()
+        existing = db.execute(select_sql, {"id": recurso_id}).mappings().fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Recurso no encontrado")
 
@@ -435,7 +437,7 @@ def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Bod
             params[key] = v
         set_sql = ", ".join(set_fragments)
         update_sql = text(f"UPDATE recursos SET {set_sql} WHERE id = :id RETURNING id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en")
-        row = db.execute(update_sql, params).fetchone()
+        row = db.execute(update_sql, params).mappings().fetchone()
         db.commit()
         if not row:
             raise HTTPException(status_code=500, detail="No se pudo actualizar el recurso")
@@ -452,13 +454,15 @@ def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Bod
         }
     except OperationalError:
         traceback.print_exc()
-        db.rollback() if db else None
+        if db:
+            db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        db.rollback() if db else None
+        if db:
+            db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al actualizar recurso")
     finally:
         if db:
@@ -474,7 +478,7 @@ def eliminar_recurso(recurso_id: int = Path(...)):
     try:
         db = next(obtener_bd())
         select_sql = text("SELECT ruta, file_path FROM recursos WHERE id = :id")
-        existing = db.execute(select_sql, {"id": recurso_id}).fetchone()
+        existing = db.execute(select_sql, {"id": recurso_id}).mappings().fetchone()
         if not existing:
             raise HTTPException(status_code=404, detail="Recurso no encontrado")
 
@@ -492,13 +496,15 @@ def eliminar_recurso(recurso_id: int = Path(...)):
         return {"ok": True}
     except OperationalError:
         traceback.print_exc()
-        db.rollback() if db else None
+        if db:
+            db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        db.rollback() if db else None
+        if db:
+            db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
     finally:
         if db:
@@ -519,6 +525,8 @@ async def upload_recurso_file(file: UploadFile = File(...)):
         dest_path = filename
 
         public_url = upload_bytes_to_supabase(raw, dest_path)
+        if not public_url or not isinstance(public_url, str):
+            raise HTTPException(status_code=500, detail="No se obtuvo URL publica despues de subir el archivo.")
         return {"ruta": public_url, "file_path": dest_path}
     except HTTPException:
         raise
@@ -571,6 +579,8 @@ async def upload_and_create_recurso(
         # subir al storage
         try:
             public = upload_bytes_to_supabase(contenido, nombre)
+            if not public or not isinstance(public, str):
+                raise HTTPException(status_code=500, detail="No se obtuvo URL publica despues de subir el archivo.")
         except HTTPException:
             raise
         except Exception as e:
@@ -592,7 +602,7 @@ async def upload_and_create_recurso(
                 "publico": publico,
                 "subido_por": subido_por
             }
-            row = db.execute(insert_sql, params).fetchone()
+            row = db.execute(insert_sql, params).mappings().fetchone()
             db.commit()
             if not row:
                 try:
