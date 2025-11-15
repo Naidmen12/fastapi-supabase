@@ -7,7 +7,7 @@ import tempfile
 from typing import List, Optional
 from urllib.parse import urlparse, unquote
 
-from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile
+from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile, Form
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
@@ -536,9 +536,9 @@ def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa d
 # ---------- upload + create (opcional, util para cliente) ----------
 @app.post("/recursos/upload_and_create", response_model=dict)
 async def upload_and_create_recurso(
-    titulo: str = Body(...),
-    publico: Optional[bool] = Body(False),
-    subido_por: Optional[int] = Body(None),
+    titulo: str = Form(...),
+    publico: Optional[bool] = Form(False),
+    subido_por: Optional[int] = Form(None),
     file: UploadFile = File(...),
     db=Depends(obtener_bd),
 ):
@@ -566,6 +566,7 @@ async def upload_and_create_recurso(
     except HTTPException:
         raise
     except Exception as e:
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
     # insertar en DB
