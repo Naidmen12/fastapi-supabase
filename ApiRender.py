@@ -51,21 +51,13 @@ app = FastAPI(title="FastAPI - Identificacion (Render)")
 # ---- Handler global para debug (opcional) ----
 @app.exception_handler(Exception)
 async def global_exception_handler(request, exc):
-    # Imprimir traceback en logs
     traceback.print_exc()
-    # Si activas DEBUG_SHOW_ERROR en variables de entorno, devolver el error en el body (solo para debug)
     if os.environ.get("DEBUG_SHOW_ERROR", "false").lower() in ("1", "true", "yes"):
         return JSONResponse(status_code=500, content={"error": str(exc)})
     return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
 
 # ---------- helpers ----------
 def extract_path_from_supabase_public_url(url: str) -> Optional[str]:
-    """
-    Extrae la ruta relativa dentro del bucket desde una URL publica de Supabase.
-    Ejemplo:
-      https://xyz.supabase.co/storage/v1/object/public/pdf/dir/archivo.pdf?token=...
-      -> "dir/archivo.pdf"
-    """
     try:
         p = urlparse(url)
         path = unquote(p.path or "")
@@ -73,8 +65,7 @@ def extract_path_from_supabase_public_url(url: str) -> Optional[str]:
         idx = path.find(marker)
         if idx == -1:
             return None
-        after = path[idx + len(marker):]  # e.g. "pdf/dir/file.pdf"
-        # si comienza con el nombre del bucket, quitarlo
+        after = path[idx + len(marker):]
         if after.startswith(BUCKET_NAME + "/"):
             return after[len(BUCKET_NAME) + 1:]
         return after
@@ -87,7 +78,6 @@ def delete_file_from_supabase(file_path_in_bucket: str) -> dict:
         raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
     try:
         res = supabase.storage.from_(BUCKET_NAME).remove([file_path_in_bucket])
-        # SDK puede devolver {'data': None, 'error': None} o {'error': {...}}
         if isinstance(res, dict) and res.get("error"):
             raise HTTPException(status_code=500, detail=f"Error al eliminar archivo en Supabase: {res['error']}")
         return res
@@ -99,23 +89,16 @@ def delete_file_from_supabase(file_path_in_bucket: str) -> dict:
 
 
 def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str:
-    """
-    Intenta subir de manera robusta: primero bytes, si falla intenta file-like y como fallback escribe un archivo temporal.
-    Retorna la URL pública (string).
-    """
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
     try:
-        # 1) intentar pasar bytes directamente (varios SDK aceptan bytes)
         try:
             res = supabase.storage.from_(BUCKET_NAME).upload(dest_path_in_bucket, file_bytes)
         except TypeError:
-            # 2) intentar pasar un file-like
             try:
                 file_obj = io.BytesIO(file_bytes)
                 res = supabase.storage.from_(BUCKET_NAME).upload(dest_path_in_bucket, file_obj)
             except Exception:
-                # 3) fallback: escribir en archivo temporal y subir por ruta
                 with tempfile.NamedTemporaryFile(delete=False) as tmp:
                     tmp.write(file_bytes)
                     tmp_path = tmp.name
@@ -127,11 +110,9 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
                     except Exception:
                         pass
 
-        # comprobar errores
         if isinstance(res, dict) and res.get("error"):
             raise HTTPException(status_code=500, detail=f"Error al subir a Supabase: {res['error']}")
 
-        # obtener public url
         public = supabase.storage.from_(BUCKET_NAME).get_public_url(dest_path_in_bucket)
         if isinstance(public, dict):
             for k in ("publicUrl", "publicURL", "public_url", "url"):
@@ -188,7 +169,7 @@ def test_db():
                 pass
 
 
-# ---------- usuarios (sin cambios) ----------
+# ---------- usuarios (sin cambios, siguen usando Depends) ----------
 @app.get("/usuarios", response_model=List[RespuestaUsuario])
 def listar_usuarios(db=Depends(obtener_bd)):
     try:
@@ -311,8 +292,10 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
 
 # ---------- recursos CRUD ----------
 @app.get("/recursos", response_model=List[RecursoOut])
-def listar_recursos(db=Depends(obtener_bd)):
+def listar_recursos():
+    db = None
     try:
+        db = next(obtener_bd())
         q = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos ORDER BY id")
         rows = db.execute(q).fetchall()
         result = []
@@ -335,20 +318,26 @@ def listar_recursos(db=Depends(obtener_bd)):
     except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno al listar recursos")
+    finally:
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 @app.post("/recursos", response_model=RecursoOut)
-def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
+def crear_recurso(payload: RecursoCreate = Body(...)):
+    db = None
     try:
+        db = next(obtener_bd())
         if not payload.ruta and not payload.url_youtube:
             raise HTTPException(status_code=400, detail="Debe proporcionar 'ruta' (archivo) o 'url_youtube'")
         if payload.url_youtube:
             if "youtube.com" not in payload.url_youtube and "youtu.be" not in payload.url_youtube:
                 raise HTTPException(status_code=400, detail="url_youtube no parece una URL de YouTube valida")
 
-        # intentar obtener file_path: si el cliente lo envio usarlo, si no intentar extraer desde la ruta publica
         file_path_val = None
-        # si el schema incluye file_path, pydantic lo tendra en payload.__dict__ si lo envio
         try:
             if hasattr(payload, "file_path") and payload.file_path:
                 file_path_val = payload.file_path
@@ -389,21 +378,27 @@ def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
         }
     except OperationalError:
         traceback.print_exc()
-        db.rollback()
+        db.rollback() if db else None
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        db.rollback()
+        db.rollback() if db else None
         raise HTTPException(status_code=500, detail="Error interno al crear recurso")
+    finally:
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 @app.put("/recursos/{recurso_id}", response_model=RecursoOut)
-def actualizar_recurso(
-    recurso_id: int = Path(...), payload: RecursoUpdate = Body(...), db=Depends(obtener_bd)
-):
+def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Body(...)):
+    db = None
     try:
+        db = next(obtener_bd())
         select_sql = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos WHERE id = :id")
         existing = db.execute(select_sql, {"id": recurso_id}).fetchone()
         if not existing:
@@ -457,19 +452,27 @@ def actualizar_recurso(
         }
     except OperationalError:
         traceback.print_exc()
-        db.rollback()
+        db.rollback() if db else None
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        db.rollback()
+        db.rollback() if db else None
         raise HTTPException(status_code=500, detail="Error interno al actualizar recurso")
+    finally:
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 @app.delete("/recursos/{recurso_id}", response_model=dict)
-def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
+def eliminar_recurso(recurso_id: int = Path(...)):
+    db = None
     try:
+        db = next(obtener_bd())
         select_sql = text("SELECT ruta, file_path FROM recursos WHERE id = :id")
         existing = db.execute(select_sql, {"id": recurso_id}).fetchone()
         if not existing:
@@ -489,14 +492,20 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
         return {"ok": True}
     except OperationalError:
         traceback.print_exc()
-        db.rollback()
+        db.rollback() if db else None
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        db.rollback()
+        db.rollback() if db else None
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
+    finally:
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
 
 
 # ---------- endpoints para manejo directo de archivos (Supabase Storage) ----------
@@ -540,18 +549,13 @@ async def upload_and_create_recurso(
     publico: Optional[bool] = Form(False),
     subido_por: Optional[int] = Form(None),
     file: UploadFile = File(...),
-    db=Depends(obtener_bd),
 ):
-    """
-    Sube el archivo al bucket y crea la fila en la tabla recursos.
-    Devuelve el registro insertado.
-    - Si la insercion en DB falla, borra el archivo subido para evitar archivos huérfanos.
-    """
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     if not titulo or titulo.strip() == "":
         raise HTTPException(status_code=400, detail="El campo 'titulo' es requerido.")
 
+    db = None
     nombre = None
     try:
         # leer bytes
@@ -575,6 +579,7 @@ async def upload_and_create_recurso(
 
         # insertar en DB
         try:
+            db = next(obtener_bd())
             insert_sql = text("""
                 INSERT INTO recursos (titulo, tipo, ruta, file_path, publico, subido_por)
                 VALUES (:titulo, 'pdf', :ruta, :file_path, :publico, :subido_por)
@@ -590,7 +595,6 @@ async def upload_and_create_recurso(
             row = db.execute(insert_sql, params).fetchone()
             db.commit()
             if not row:
-                # borrar archivo subido si la insercion no devolvio fila
                 try:
                     delete_file_from_supabase(nombre)
                 except Exception:
@@ -613,20 +617,23 @@ async def upload_and_create_recurso(
             raise
         except Exception as e:
             traceback.print_exc()
-            # borrar el archivo subido para evitar huella
             try:
                 if nombre:
                     delete_file_from_supabase(nombre)
             except Exception:
                 traceback.print_exc()
             try:
-                db.rollback()
+                if db:
+                    db.rollback()
             except Exception:
                 pass
             raise HTTPException(status_code=500, detail=f"Error interno al crear el recurso: {str(e)}")
-
     finally:
-        # limpiar variables grandes
+        if db:
+            try:
+                db.close()
+            except Exception:
+                pass
         try:
             contenido = None
         except Exception:
