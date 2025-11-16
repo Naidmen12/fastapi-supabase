@@ -1,9 +1,10 @@
-# ApiRender.py
+# RenderApi.py
 import os
 import io
 import uuid
 import traceback
 import tempfile
+import logging
 from typing import List, Optional
 from urllib.parse import urlparse, unquote
 
@@ -12,7 +13,8 @@ from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
 
-from db import obtener_bd
+# importar la dependencia de BD y helper init_db
+from db import obtener_bd, init_db
 from models import Usuario
 from schemas import (
     PeticionInicio,
@@ -31,22 +33,39 @@ except Exception:
     create_client = None
     Client = None
 
+logger = logging.getLogger("uvicorn.error")
+
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY")
+BUCKET_NAME = os.environ.get("SUPABASE_BUCKET", "pdf")
+
 if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
-    print("AVISO: SUPABASE_URL o SUPABASE_SERVICE_KEY no estan definidas. Define las variables de entorno.")
+    logger.warning("AVISO: SUPABASE_URL o SUPABASE_SERVICE_KEY no estan definidas. Define las variables de entorno.")
 
 supabase: Optional[Client] = None
 if SUPABASE_URL and SUPABASE_SERVICE_KEY and create_client is not None:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        logger.info("Supabase client inicializado")
     except Exception:
         supabase = None
-        traceback.print_exc()
-
-BUCKET_NAME = os.environ.get("SUPABASE_BUCKET", "pdf")
+        logger.exception("No se pudo inicializar Supabase client")
+else:
+    if create_client is None:
+        logger.warning("SDK de supabase no disponible: 'supabase' package no importado")
 
 app = FastAPI(title="FastAPI - Identificacion (Render)")
+
+# ------------------------------------------------------------------
+# Startup: intentar warmup DB
+# ------------------------------------------------------------------
+@app.on_event("startup")
+def on_startup():
+    try:
+        # intenta verificar la BD en startup para reducir errores iniciales
+        init_db(startup_retries=3, startup_delay=1.0)
+    except Exception:
+        logger.exception("Error en init_db durante startup")
 
 # ------------------------------------------------------------------
 # Handler para HTTPException: loggea y pasa headers como Retry-After
@@ -55,8 +74,7 @@ app = FastAPI(title="FastAPI - Identificacion (Render)")
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
     # Loguear stack trace para 503 y errores criticos
     if exc.status_code == 503:
-        # Es comun que este 503 venga del circuit-breaker en db.py
-        traceback.print_exc()
+        logger.exception("HTTPException 503: %s", exc.detail)
     # Asegurarse de propagar headers (ej: Retry-After)
     headers = getattr(exc, "headers", None) or {}
     return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=headers)
@@ -64,12 +82,13 @@ async def custom_http_exception_handler(request: Request, exc: HTTPException):
 # Handler global para debug (mantener pero mas limpio)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    traceback.print_exc()
+    logger.exception("Unhandled exception: %s", exc)
     if os.environ.get("DEBUG_SHOW_ERROR", "false").lower() in ("1", "true", "yes"):
         return JSONResponse(status_code=500, content={"error": str(exc)})
     return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
 
 # ---------- helpers ----------
+
 def extract_path_from_supabase_public_url(url: str) -> Optional[str]:
     try:
         p = urlparse(url)
@@ -91,13 +110,14 @@ def delete_file_from_supabase(file_path_in_bucket: str) -> dict:
         raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     try:
         res = supabase.storage.from_(BUCKET_NAME).remove([file_path_in_bucket])
+        # algunos SDKs devuelven (data, error) o dict
         if isinstance(res, dict) and res.get("error"):
             raise HTTPException(status_code=500, detail=f"Error al eliminar archivo en Supabase: {res['error']}")
         return res
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("Error eliminando archivo en Supabase: %s", e)
         raise HTTPException(status_code=500, detail=f"Error interno al eliminar archivo en Supabase: {str(e)}")
 
 
@@ -129,6 +149,7 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
             raise HTTPException(status_code=500, detail=f"Error al subir a Supabase: {res['error']}")
 
         public = supabase.storage.from_(BUCKET_NAME).get_public_url(dest_path_in_bucket)
+        # normalizar distintos retornos
         if isinstance(public, dict):
             for k in ("publicUrl", "publicURL", "public_url", "url"):
                 if k in public:
@@ -140,7 +161,7 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("Error subiendo archivo a Supabase: %s", e)
         raise HTTPException(status_code=500, detail=f"Error interno al subir archivo: {str(e)}")
 
 
@@ -155,8 +176,9 @@ def raiz_head():
     return PlainTextResponse(status_code=200)
 
 
-# Health simple (sin DB)
+# Health simple (sin DB) - aceptar HEAD para Render
 @app.get("/health", response_class=PlainTextResponse)
+@app.head("/health", include_in_schema=False)
 async def health():
     return PlainTextResponse("OK", status_code=200)
 
@@ -174,7 +196,7 @@ def test_db(db = Depends(obtener_bd)):
         row = db.execute(text("SELECT 1")).fetchone()
         return {"ok": True, "result": row[0] if row else None}
     except Exception as e:
-        traceback.print_exc()
+        logger.exception("test-db error: %s", e)
         return {"ok": False, "error": str(e)}
 
 
@@ -185,10 +207,10 @@ def listar_usuarios(db=Depends(obtener_bd)):
         usuarios = db.query(Usuario).order_by(Usuario.id).all()
         return usuarios
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("listar_usuarios: OperationalError")
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except Exception:
-        traceback.print_exc()
+        logger.exception("listar_usuarios: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al listar usuarios")
 
 
@@ -215,17 +237,17 @@ def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
         db.refresh(nuevo)
         return nuevo
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("crear_usuario: OperationalError")
         db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except IntegrityError:
-        traceback.print_exc()
+        logger.exception("crear_usuario: IntegrityError")
         db.rollback()
         raise HTTPException(status_code=400, detail="Codigo duplicado")
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("crear_usuario: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al crear usuario")
 
@@ -269,13 +291,13 @@ def actualizar_usuario(
         db.refresh(item)
         return item
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("actualizar_usuario: OperationalError")
         db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("actualizar_usuario: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al actualizar usuario")
 
@@ -290,11 +312,11 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
         db.commit()
         return {"ok": True}
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("eliminar_usuario: OperationalError")
         db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except Exception:
-        traceback.print_exc()
+        logger.exception("eliminar_usuario: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
@@ -320,10 +342,10 @@ def listar_recursos(db=Depends(obtener_bd)):
             })
         return result
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("listar_recursos: OperationalError")
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except Exception:
-        traceback.print_exc()
+        logger.exception("listar_recursos: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al listar recursos")
 
 
@@ -376,13 +398,13 @@ def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
             "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
         }
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("crear_recurso: OperationalError")
         db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("crear_recurso: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al crear recurso")
 
@@ -442,13 +464,13 @@ def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Bod
             "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
         }
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("actualizar_recurso: OperationalError")
         db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("actualizar_recurso: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al actualizar recurso")
 
@@ -467,20 +489,20 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
             try:
                 delete_file_from_supabase(file_path)
             except HTTPException:
-                traceback.print_exc()
+                logger.exception("eliminar_recurso: fallo al eliminar archivo en supabase")
 
         delete_sql = text("DELETE FROM recursos WHERE id = :id")
         db.execute(delete_sql, {"id": recurso_id})
         db.commit()
         return {"ok": True}
     except OperationalError:
-        traceback.print_exc()
+        logger.exception("eliminar_recurso: OperationalError")
         db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("eliminar_recurso: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
 
@@ -502,7 +524,7 @@ async def upload_recurso_file(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("upload_recurso_file: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al subir archivo")
 
 
@@ -516,7 +538,7 @@ def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa d
     except HTTPException:
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("delete_file_endpoint: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al eliminar archivo")
 
 
@@ -538,7 +560,7 @@ async def upload_and_create_recurso(
         try:
             contenido = await file.read()
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("upload_and_create_recurso: no se pudo leer archivo: %s", e)
             raise HTTPException(status_code=500, detail=f"No se pudo leer el archivo: {str(e)}")
 
         nombre = f"{uuid.uuid4().hex}_{file.filename}"
@@ -550,7 +572,7 @@ async def upload_and_create_recurso(
         except HTTPException:
             raise
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("upload_and_create_recurso: error subiendo archivo: %s", e)
             raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
         try:
@@ -572,7 +594,7 @@ async def upload_and_create_recurso(
                 try:
                     delete_file_from_supabase(nombre)
                 except Exception:
-                    traceback.print_exc()
+                    logger.exception("upload_and_create_recurso: fallo cleanup archivo")
                 raise HTTPException(status_code=500, detail="No se pudo crear el registro en la base de datos.")
 
             respuesta = {
@@ -588,23 +610,23 @@ async def upload_and_create_recurso(
             return respuesta
 
         except OperationalError:
-            traceback.print_exc()
+            logger.exception("upload_and_create_recurso: OperationalError")
             try:
                 if nombre:
                     delete_file_from_supabase(nombre)
             except Exception:
-                traceback.print_exc()
+                logger.exception("upload_and_create_recurso: fallo cleanup OperationalError")
             db.rollback()
             raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
         except HTTPException:
             raise
         except Exception as e:
-            traceback.print_exc()
+            logger.exception("upload_and_create_recurso: unexpected: %s", e)
             try:
                 if nombre:
                     delete_file_from_supabase(nombre)
             except Exception:
-                traceback.print_exc()
+                logger.exception("upload_and_create_recurso: fallo cleanup unexpected")
             try:
                 db.rollback()
             except Exception:
@@ -629,13 +651,13 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
             .first()
         )
     except OperationalError as e:
-        traceback.print_exc()
+        logger.exception("login: OperationalError")
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         # si obtener_bd ya lanzo HTTPException (ej: 503) dejamos pasar
         raise
     except Exception:
-        traceback.print_exc()
+        logger.exception("login: unexpected")
         raise HTTPException(status_code=500, detail="Error interno")
 
     if not usuario:
@@ -658,4 +680,4 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
-    uvicorn.run("ApiRender:app", host="0.0.0.0", port=port)
+    uvicorn.run("RenderApi:app", host="0.0.0.0", port=port)
