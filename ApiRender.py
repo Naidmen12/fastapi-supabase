@@ -7,7 +7,7 @@ import tempfile
 from typing import List, Optional
 from urllib.parse import urlparse, unquote
 
-from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile, Form
+from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile, Form, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
@@ -24,7 +24,7 @@ from schemas import (
     RecursoOut,
 )
 
-# Intentamos importar el cliente de Supabase
+# Intento importar cliente Supabase
 try:
     from supabase import create_client, Client
 except Exception:
@@ -44,13 +44,26 @@ if SUPABASE_URL and SUPABASE_SERVICE_KEY and create_client is not None:
         supabase = None
         traceback.print_exc()
 
-BUCKET_NAME = os.environ.get("SUPABASE_BUCKET", "pdf")  # default 'pdf'
+BUCKET_NAME = os.environ.get("SUPABASE_BUCKET", "pdf")
 
 app = FastAPI(title="FastAPI - Identificacion (Render)")
 
-# ---- Handler global para debug (opcional) ----
+# ------------------------------------------------------------------
+# Handler para HTTPException: loggea y pasa headers como Retry-After
+# ------------------------------------------------------------------
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    # Loguear stack trace para 503 y errores criticos
+    if exc.status_code == 503:
+        # Es comun que este 503 venga del circuit-breaker en db.py
+        traceback.print_exc()
+    # Asegurarse de propagar headers (ej: Retry-After)
+    headers = getattr(exc, "headers", None) or {}
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=headers)
+
+# Handler global para debug (mantener pero mas limpio)
 @app.exception_handler(Exception)
-async def global_exception_handler(request, exc):
+async def global_exception_handler(request: Request, exc: Exception):
     traceback.print_exc()
     if os.environ.get("DEBUG_SHOW_ERROR", "false").lower() in ("1", "true", "yes"):
         return JSONResponse(status_code=500, content={"error": str(exc)})
@@ -75,7 +88,7 @@ def extract_path_from_supabase_public_url(url: str) -> Optional[str]:
 
 def delete_file_from_supabase(file_path_in_bucket: str) -> dict:
     if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
+        raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     try:
         res = supabase.storage.from_(BUCKET_NAME).remove([file_path_in_bucket])
         if isinstance(res, dict) and res.get("error"):
@@ -90,15 +103,17 @@ def delete_file_from_supabase(file_path_in_bucket: str) -> dict:
 
 def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str:
     if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
+        raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     try:
         try:
             res = supabase.storage.from_(BUCKET_NAME).upload(dest_path_in_bucket, file_bytes)
         except TypeError:
+            # algunos SDKs esperan file-like objects
             try:
                 file_obj = io.BytesIO(file_bytes)
                 res = supabase.storage.from_(BUCKET_NAME).upload(dest_path_in_bucket, file_obj)
             except Exception:
+                # fallback a archivo temporal
                 with tempfile.NamedTemporaryFile(delete=False) as tmp:
                     tmp.write(file_bytes)
                     tmp_path = tmp.name
@@ -140,16 +155,15 @@ def raiz_head():
     return PlainTextResponse(status_code=200)
 
 
-# Health simple (sin DB) - para comprobar que el servicio está arriba
+# Health simple (sin DB)
 @app.get("/health", response_class=PlainTextResponse)
 async def health():
     return PlainTextResponse("OK", status_code=200)
 
 
-# Health que comprueba la BD (devuelve 503 si BD no esta disponible)
+# Health que comprueba la BD (dependencia puede lanzar HTTPException 503)
 @app.get("/health/db", response_class=PlainTextResponse)
 def health_db(db = Depends(obtener_bd)):
-    # si la dependencia obtuvo la sesión, la BD está disponible
     return PlainTextResponse("OK", status_code=200)
 
 
@@ -161,11 +175,10 @@ def test_db(db = Depends(obtener_bd)):
         return {"ok": True, "result": row[0] if row else None}
     except Exception as e:
         traceback.print_exc()
-        # Si obtener_bd devolvió 503, FastAPI ya respondió 503 antes de entrar aquí.
         return {"ok": False, "error": str(e)}
 
 
-# ---------- usuarios (sin cambios de contrato) ----------
+# ---------- usuarios ----------
 @app.get("/usuarios", response_model=List[RespuestaUsuario])
 def listar_usuarios(db=Depends(obtener_bd)):
     try:
@@ -286,7 +299,7 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
 
-# ---------- recursos CRUD (ahora reciben db via Depends) ----------
+# ---------- recursos CRUD ----------
 @app.get("/recursos", response_model=List[RecursoOut])
 def listar_recursos(db=Depends(obtener_bd)):
     try:
@@ -472,11 +485,11 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
 
 
-# ---------- endpoints para manejo directo de archivos (Supabase Storage) ----------
+# ---------- storage endpoints ----------
 @app.post("/recursos/upload", response_model=dict)
 async def upload_recurso_file(file: UploadFile = File(...)):
     if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
+        raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     try:
         raw = await file.read()
         filename = f"{uuid.uuid4().hex}_{file.filename}"
@@ -493,11 +506,10 @@ async def upload_recurso_file(file: UploadFile = File(...)):
         raise HTTPException(status_code=500, detail="Error interno al subir archivo")
 
 
-# endpoint que acepta file_path con slashes
 @app.delete("/recursos/delete_file/{file_path:path}", response_model=dict)
 def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa dentro del bucket (puede contener /)")):
     if not supabase:
-        raise HTTPException(status_code=500, detail="Supabase no está configurado en el servidor.")
+        raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     try:
         delete_file_from_supabase(file_path)
         return {"ok": True}
@@ -508,7 +520,6 @@ def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa d
         raise HTTPException(status_code=500, detail="Error interno al eliminar archivo")
 
 
-# ---------- upload + create (opcional, util para cliente) ----------
 @app.post("/recursos/upload_and_create", response_model=dict)
 async def upload_and_create_recurso(
     titulo: str = Form(...),
@@ -524,17 +535,14 @@ async def upload_and_create_recurso(
 
     nombre = None
     try:
-        # leer bytes
         try:
             contenido = await file.read()
         except Exception as e:
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"No se pudo leer el archivo: {str(e)}")
 
-        # generar nombre en bucket
         nombre = f"{uuid.uuid4().hex}_{file.filename}"
 
-        # subir al storage
         try:
             public = upload_bytes_to_supabase(contenido, nombre)
             if not public or not isinstance(public, str):
@@ -545,7 +553,6 @@ async def upload_and_create_recurso(
             traceback.print_exc()
             raise HTTPException(status_code=500, detail=f"Error al subir archivo: {str(e)}")
 
-        # insertar en DB
         try:
             insert_sql = text("""
                 INSERT INTO recursos (titulo, tipo, ruta, file_path, publico, subido_por)
@@ -580,8 +587,6 @@ async def upload_and_create_recurso(
             }
             return respuesta
 
-        except HTTPException:
-            raise
         except OperationalError:
             traceback.print_exc()
             try:
@@ -591,6 +596,8 @@ async def upload_and_create_recurso(
                 traceback.print_exc()
             db.rollback()
             raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+        except HTTPException:
+            raise
         except Exception as e:
             traceback.print_exc()
             try:
@@ -610,7 +617,7 @@ async def upload_and_create_recurso(
             pass
 
 
-# ---------- login (sin cambios lógicos) ----------
+# ---------- login ----------
 @app.post("/login", response_model=RespuestaUsuario)
 def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
@@ -624,6 +631,9 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     except OperationalError as e:
         traceback.print_exc()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except HTTPException:
+        # si obtener_bd ya lanzo HTTPException (ej: 503) dejamos pasar
+        raise
     except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno")
