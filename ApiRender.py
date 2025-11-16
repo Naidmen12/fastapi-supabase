@@ -140,36 +140,32 @@ def raiz_head():
     return PlainTextResponse(status_code=200)
 
 
+# Health simple (sin DB) - para comprobar que el servicio está arriba
 @app.get("/health", response_class=PlainTextResponse)
 async def health():
     return PlainTextResponse("OK", status_code=200)
 
 
-@app.head("/health")
-async def health_head():
-    return PlainTextResponse(status_code=200)
+# Health que comprueba la BD (devuelve 503 si BD no esta disponible)
+@app.get("/health/db", response_class=PlainTextResponse)
+def health_db(db = Depends(obtener_bd)):
+    # si la dependencia obtuvo la sesión, la BD está disponible
+    return PlainTextResponse("OK", status_code=200)
 
 
 # ---------- test db ----------
 @app.get("/test-db")
-def test_db():
-    db = None
+def test_db(db = Depends(obtener_bd)):
     try:
-        db = next(obtener_bd())
         row = db.execute(text("SELECT 1")).fetchone()
         return {"ok": True, "result": row[0] if row else None}
     except Exception as e:
         traceback.print_exc()
+        # Si obtener_bd devolvió 503, FastAPI ya respondió 503 antes de entrar aquí.
         return {"ok": False, "error": str(e)}
-    finally:
-        if db:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
-# ---------- usuarios (sin cambios, siguen usando Depends) ----------
+# ---------- usuarios (sin cambios de contrato) ----------
 @app.get("/usuarios", response_model=List[RespuestaUsuario])
 def listar_usuarios(db=Depends(obtener_bd)):
     try:
@@ -290,12 +286,10 @@ def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
         raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
 
-# ---------- recursos CRUD ----------
+# ---------- recursos CRUD (ahora reciben db via Depends) ----------
 @app.get("/recursos", response_model=List[RecursoOut])
-def listar_recursos():
-    db = None
+def listar_recursos(db=Depends(obtener_bd)):
     try:
-        db = next(obtener_bd())
         q = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos ORDER BY id")
         rows = db.execute(q).mappings().all()
         result = []
@@ -318,19 +312,11 @@ def listar_recursos():
     except Exception:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="Error interno al listar recursos")
-    finally:
-        if db:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
 @app.post("/recursos", response_model=RecursoOut)
-def crear_recurso(payload: RecursoCreate = Body(...)):
-    db = None
+def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
     try:
-        db = next(obtener_bd())
         if not payload.ruta and not payload.url_youtube:
             raise HTTPException(status_code=400, detail="Debe proporcionar 'ruta' (archivo) o 'url_youtube'")
         if payload.url_youtube:
@@ -378,29 +364,19 @@ def crear_recurso(payload: RecursoCreate = Body(...)):
         }
     except OperationalError:
         traceback.print_exc()
-        if db:
-            db.rollback()
+        db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        if db:
-            db.rollback()
+        db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al crear recurso")
-    finally:
-        if db:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
 @app.put("/recursos/{recurso_id}", response_model=RecursoOut)
-def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Body(...)):
-    db = None
+def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Body(...), db=Depends(obtener_bd)):
     try:
-        db = next(obtener_bd())
         select_sql = text("SELECT id, titulo, tipo, ruta, file_path, url_youtube, publico, subido_por, creado_en FROM recursos WHERE id = :id")
         existing = db.execute(select_sql, {"id": recurso_id}).mappings().fetchone()
         if not existing:
@@ -454,29 +430,19 @@ def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Bod
         }
     except OperationalError:
         traceback.print_exc()
-        if db:
-            db.rollback()
+        db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        if db:
-            db.rollback()
+        db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al actualizar recurso")
-    finally:
-        if db:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
 @app.delete("/recursos/{recurso_id}", response_model=dict)
-def eliminar_recurso(recurso_id: int = Path(...)):
-    db = None
+def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
     try:
-        db = next(obtener_bd())
         select_sql = text("SELECT ruta, file_path FROM recursos WHERE id = :id")
         existing = db.execute(select_sql, {"id": recurso_id}).mappings().fetchone()
         if not existing:
@@ -496,22 +462,14 @@ def eliminar_recurso(recurso_id: int = Path(...)):
         return {"ok": True}
     except OperationalError:
         traceback.print_exc()
-        if db:
-            db.rollback()
+        db.rollback()
         raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
     except HTTPException:
         raise
     except Exception:
         traceback.print_exc()
-        if db:
-            db.rollback()
+        db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
-    finally:
-        if db:
-            try:
-                db.close()
-            except Exception:
-                pass
 
 
 # ---------- endpoints para manejo directo de archivos (Supabase Storage) ----------
@@ -557,13 +515,13 @@ async def upload_and_create_recurso(
     publico: Optional[bool] = Form(False),
     subido_por: Optional[int] = Form(None),
     file: UploadFile = File(...),
+    db = Depends(obtener_bd),
 ):
     if not supabase:
         raise HTTPException(status_code=500, detail="Supabase no esta configurado en el servidor.")
     if not titulo or titulo.strip() == "":
         raise HTTPException(status_code=400, detail="El campo 'titulo' es requerido.")
 
-    db = None
     nombre = None
     try:
         # leer bytes
@@ -589,7 +547,6 @@ async def upload_and_create_recurso(
 
         # insertar en DB
         try:
-            db = next(obtener_bd())
             insert_sql = text("""
                 INSERT INTO recursos (titulo, tipo, ruta, file_path, publico, subido_por)
                 VALUES (:titulo, 'pdf', :ruta, :file_path, :publico, :subido_por)
@@ -625,6 +582,15 @@ async def upload_and_create_recurso(
 
         except HTTPException:
             raise
+        except OperationalError:
+            traceback.print_exc()
+            try:
+                if nombre:
+                    delete_file_from_supabase(nombre)
+            except Exception:
+                traceback.print_exc()
+            db.rollback()
+            raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
         except Exception as e:
             traceback.print_exc()
             try:
@@ -633,24 +599,18 @@ async def upload_and_create_recurso(
             except Exception:
                 traceback.print_exc()
             try:
-                if db:
-                    db.rollback()
+                db.rollback()
             except Exception:
                 pass
             raise HTTPException(status_code=500, detail=f"Error interno al crear el recurso: {str(e)}")
     finally:
-        if db:
-            try:
-                db.close()
-            except Exception:
-                pass
         try:
             contenido = None
         except Exception:
             pass
 
 
-# ---------- login (sin cambios) ----------
+# ---------- login (sin cambios lógicos) ----------
 @app.post("/login", response_model=RespuestaUsuario)
 def login(datos: PeticionInicio, db=Depends(obtener_bd)):
     try:
