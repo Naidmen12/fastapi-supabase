@@ -2,16 +2,17 @@
 from sqlalchemy import Column, Integer, String, Boolean, Text, ForeignKey, TIMESTAMP
 from sqlalchemy.sql import func
 from sqlalchemy.dialects.postgresql import ENUM as PG_ENUM
+from sqlalchemy.dialects.postgresql import ARRAY, INTEGER
 from db import Base
 
 # Definimos el ENUM de SQLAlchemy indicando create_type=False
-# porque el tipo role_type ya existe en la base de datos (Postgres enum).
+# porque el tipo role_type ya existe en la base de datos.
 role_enum = PG_ENUM('Estudiante', 'Profesor', name='role_type', create_type=False)
 
 class Usuario(Base):
     __tablename__ = "usuarios"
     id = Column(Integer, primary_key=True, index=True)
-    rol = Column(role_enum, nullable=False)  # usamos el ENUM mapeado a Postgres
+    rol = Column(role_enum, nullable=False)
     codigo = Column(String(64), unique=True, nullable=False, index=True)
     clave = Column(Text, nullable=True)
     creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
@@ -32,3 +33,20 @@ class Recurso(Base):
     publico = Column(Boolean, default=False)
     creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
     actualizado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f"<Recurso id={self.id} titulo={self.titulo} tipo={self.tipo}>"
+
+# -------------------------------------
+# Nueva tabla PESTANAS
+# -------------------------------------
+class Pestana(Base):
+    __tablename__ = "pestanas"
+    id = Column(Integer, primary_key=True, index=True)
+    nombre = Column(String, nullable=False)
+    orden = Column(ARRAY(INTEGER), nullable=False, default=[])  # lista de ids de recursos
+    creado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    actualizado_en = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    def __repr__(self):
+        return f"<Pestana id={self.id} nombre={self.nombre}>"
