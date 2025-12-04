@@ -1,6 +1,7 @@
-# schemas.py
+#schemas.py
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
+
 from enum import Enum as PyEnum
 
 class RoleEnum(str, PyEnum):
@@ -12,16 +13,13 @@ class PeticionInicio(BaseModel):
     codigo: str
     clave: Optional[str] = None
 
-# Respuesta de usuario incluyendo 'clave'
 class RespuestaUsuario(BaseModel):
     id: int
     rol: str
     codigo: str
-    clave: Optional[str] = None  # agregado para que la API devuelva la clave
-
+    clave: Optional[str] = None
     model_config = {"from_attributes": True}
 
-# Usuario create/update
 class UsuarioCreate(BaseModel):
     rol: RoleEnum
     codigo: str
@@ -59,5 +57,23 @@ class RecursoUpdate(BaseModel):
 class RecursoOut(RecursoBase):
     id: int
     creado_en: Optional[str] = None
+    model_config = {"from_attributes": True}
 
+# ------------------------------------------------
+# Pestanas (nueva entidad para ordenar recursos)
+# ------------------------------------------------
+class PestanaBase(BaseModel):
+    nombre: str
+    orden: Optional[List[int]] = []
+
+class PestanaCreate(PestanaBase):
+    pass
+
+class PestanaUpdate(BaseModel):
+    nombre: Optional[str] = None
+    orden: Optional[List[int]] = None
+
+class PestanaOut(PestanaBase):
+    id: int
+    creado_en: Optional[str] = None
     model_config = {"from_attributes": True}
