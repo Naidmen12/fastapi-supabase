@@ -24,6 +24,9 @@ from schemas import (
     RecursoCreate,
     RecursoUpdate,
     RecursoOut,
+    PestanaCreate,
+    PestanaUpdate,
+    PestanaOut,
 )
 
 # Intento importar cliente Supabase
@@ -163,7 +166,6 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
     except Exception as e:
         logger.exception("Error subiendo archivo a Supabase: %s", e)
         raise HTTPException(status_code=500, detail=f"Error interno al subir archivo: {str(e)}")
-
 
 # ---------- rutas base / health ----------
 @app.get("/", include_in_schema=False)
@@ -637,6 +639,149 @@ async def upload_and_create_recurso(
             contenido = None
         except Exception:
             pass
+
+
+# ---------- pestanas CRUD ----------
+@app.get("/pestanas", response_model=List[PestanaOut])
+def listar_pestanas(db = Depends(obtener_bd)):
+    try:
+        q = text("SELECT id, nombre, orden, creado_en FROM pestanas ORDER BY id")
+        rows = db.execute(q).mappings().all()
+        result = []
+        for r in rows:
+            result.append({
+                "id": r["id"],
+                "nombre": r["nombre"],
+                "orden": list(r["orden"]) if r["orden"] is not None else [],
+                "creado_en": str(r["creado_en"]) if r["creado_en"] is not None else None
+            })
+        return result
+    except OperationalError:
+        logger.exception("listar_pestanas: OperationalError")
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except Exception:
+        logger.exception("listar_pestanas: unexpected")
+        raise HTTPException(status_code=500, detail="Error interno al listar pestanas")
+
+
+@app.post("/pestanas", response_model=PestanaOut, status_code=201)
+def crear_pestana(payload: PestanaCreate = Body(...), db = Depends(obtener_bd)):
+    try:
+        insert_sql = text("""
+            INSERT INTO pestanas (nombre, orden)
+            VALUES (:nombre, :orden)
+            RETURNING id, nombre, orden, creado_en
+        """)
+        params = {
+            "nombre": payload.nombre,
+            "orden": payload.orden or []
+        }
+        row = db.execute(insert_sql, params).mappings().fetchone()
+        db.commit()
+        if not row:
+            raise HTTPException(status_code=500, detail="No se pudo crear la pestana")
+        return {
+            "id": row["id"],
+            "nombre": row["nombre"],
+            "orden": list(row["orden"]) if row["orden"] is not None else [],
+            "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
+        }
+    except OperationalError:
+        logger.exception("crear_pestana: OperationalError")
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("crear_pestana: unexpected")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error interno al crear pestana")
+
+
+@app.put("/pestanas/{pestana_id}", response_model=PestanaOut)
+def actualizar_pestana(pestana_id: int = Path(...), payload: PestanaUpdate = Body(...), db = Depends(obtener_bd)):
+    try:
+        select_sql = text("SELECT id, nombre, orden, creado_en FROM pestanas WHERE id = :id")
+        existing = db.execute(select_sql, {"id": pestana_id}).mappings().fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Pestana no encontrada")
+
+        # obtener datos enviados (compatible pydantic v1 y v2)
+        if hasattr(payload, "model_dump"):
+            data = payload.model_dump(exclude_unset=True)
+        else:
+            data = payload.dict(exclude_unset=True)
+
+        data.pop("id", None)
+        data.pop("creado_en", None)
+
+        allowed = {"nombre", "orden"}
+        updates = {k: v for k, v in data.items() if k in allowed}
+
+        if not updates:
+            # nada que actualizar; devolver la fila existente
+            return {
+                "id": existing["id"],
+                "nombre": existing["nombre"],
+                "orden": list(existing["orden"]) if existing["orden"] is not None else [],
+                "creado_en": str(existing["creado_en"]) if existing["creado_en"] is not None else None
+            }
+
+        set_fragments = []
+        params = {"id": pestana_id}
+        idx = 0
+        for k, v in updates.items():
+            idx += 1
+            key = f"v{idx}"
+            set_fragments.append(f"{k} = :{key}")
+            params[key] = v
+
+        set_sql = ", ".join(set_fragments)
+        update_sql = text(f"UPDATE pestanas SET {set_sql} WHERE id = :id RETURNING id, nombre, orden, creado_en")
+        row = db.execute(update_sql, params).mappings().fetchone()
+        db.commit()
+        if not row:
+            raise HTTPException(status_code=500, detail="No se pudo actualizar la pestana")
+        return {
+            "id": row["id"],
+            "nombre": row["nombre"],
+            "orden": list(row["orden"]) if row["orden"] is not None else [],
+            "creado_en": str(row["creado_en"]) if row["creado_en"] is not None else None
+        }
+    except OperationalError:
+        logger.exception("actualizar_pestana: OperationalError")
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("actualizar_pestana: unexpected")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error interno al actualizar pestana")
+
+
+@app.delete("/pestanas/{pestana_id}", response_model=dict)
+def eliminar_pestana(pestana_id: int = Path(...), db = Depends(obtener_bd)):
+    try:
+        select_sql = text("SELECT id FROM pestanas WHERE id = :id")
+        existing = db.execute(select_sql, {"id": pestana_id}).mappings().fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Pestana no encontrada")
+
+        delete_sql = text("DELETE FROM pestanas WHERE id = :id")
+        db.execute(delete_sql, {"id": pestana_id})
+        db.commit()
+        return {"ok": True}
+    except OperationalError:
+        logger.exception("eliminar_pestana: OperationalError")
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("eliminar_pestana: unexpected")
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Error interno al eliminar pestana")
 
 
 # ---------- login ----------
