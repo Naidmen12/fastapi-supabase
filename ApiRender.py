@@ -93,7 +93,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": "Internal Server Error"})
 
 # ---------- helpers ----------
-
 def extract_path_from_supabase_public_url(url: str) -> Optional[str]:
     try:
         p = urlparse(url)
@@ -168,6 +167,37 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
     except Exception as e:
         logger.exception("Error subiendo archivo a Supabase: %s", e)
         raise HTTPException(status_code=500, detail=f"Error interno al subir archivo: {str(e)}")
+
+
+# -----------------------
+# RUTAS RAIZ y HEALTH
+# -----------------------
+@app.get("/", include_in_schema=False)
+@app.head("/", include_in_schema=False)
+def raiz_get():
+    return {"mensaje": "API funcionando correctamente"}
+
+# Health simple (sin DB) - aceptar HEAD para Render
+@app.get("/health", response_class=PlainTextResponse)
+@app.head("/health", include_in_schema=False)
+async def health():
+    return PlainTextResponse("OK", status_code=200)
+
+# Health que comprueba la BD (dependencia puede lanzar HTTPException 503)
+@app.get("/health/db", response_class=PlainTextResponse)
+def health_db(db = Depends(obtener_bd)):
+    return PlainTextResponse("OK", status_code=200)
+
+# ---------- test db ----------
+@app.get("/test-db")
+def test_db(db = Depends(obtener_bd)):
+    try:
+        row = db.execute(text("SELECT 1")).fetchone()
+        return {"ok": True, "result": row[0] if row else None}
+    except Exception as e:
+        logger.exception("test-db error: %s", e)
+        return {"ok": False, "error": str(e)}
+
 
 # -------------------------------------------------
 # INICIO: FUNCIONES Y ENDPOINTS PDF -> IMAGEN / DOWNLOAD
