@@ -5,11 +5,13 @@ import uuid
 import traceback
 import tempfile
 import logging
-from typing import List, Optional
+import re
+from typing import List, Optional, Iterator
 from urllib.parse import urlparse, unquote
 
-from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile, Form, Request
-from fastapi.responses import PlainTextResponse, JSONResponse
+import requests
+from fastapi import FastAPI, Depends, HTTPException, Body, Path, File, UploadFile, Form, Request, Query, Response
+from fastapi.responses import PlainTextResponse, JSONResponse, StreamingResponse
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy import text
 
@@ -167,161 +169,210 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
         logger.exception("Error subiendo archivo a Supabase: %s", e)
         raise HTTPException(status_code=500, detail=f"Error interno al subir archivo: {str(e)}")
 
-# ---------- rutas base / health ----------
-@app.get("/", include_in_schema=False)
-def raiz_get():
-    return {"mensaje": "API funcionando correctamente"}
+# -------------------------------------------------
+# INICIO: FUNCIONES Y ENDPOINTS PDF -> IMAGEN / DOWNLOAD
+# -------------------------------------------------
 
+# util: sanitizar nombre (para Content-Disposition)
+def sanitizar_nombre(nombre: Optional[str]) -> str:
+    if not nombre:
+        nombre = "documento"
+    nombre_seguro = re.sub(r"[^A-Za-z0-9_.-]", "_", nombre)
+    return nombre_seguro[:120]
 
-@app.head("/", include_in_schema=False)
-def raiz_head():
-    return PlainTextResponse(status_code=200)
+# normalizar distintos retornos del SDK de supabase
+def _normalizar_respuesta_supabase(res) -> Optional[bytes]:
+    if res is None:
+        return None
+    if isinstance(res, dict):
+        if "data" in res and isinstance(res["data"], (bytes, bytearray)):
+            return bytes(res["data"])
+        return None
+    if hasattr(res, "read"):
+        try:
+            return res.read()
+        except Exception:
+            return None
+    if isinstance(res, (bytes, bytearray)):
+        return bytes(res)
+    # caso tupla (data, error)
+    if isinstance(res, (list, tuple)) and len(res) >= 1 and isinstance(res[0], (bytes, bytearray)):
+        return bytes(res[0])
+    return None
 
+# intento de obtener bytes del PDF: storage primero, luego ruta publica HTTP
+def obtener_bytes_pdf_desde_recurso(ruta_publica: Optional[str], path_archivo: Optional[str]) -> bytes:
+    # 1) intentar desde supabase storage si existe path_archivo
+    if path_archivo and supabase:
+        try:
+            try:
+                res = supabase.storage.from_(BUCKET_NAME).download(path_archivo)
+            except TypeError:
+                res = supabase.storage.from_(BUCKET_NAME).download(path_archivo)
+            datos = _normalizar_respuesta_supabase(res)
+            if datos:
+                return datos
+            # si res es (data, error)
+            if isinstance(res, (list, tuple)) and len(res) >= 1 and isinstance(res[0], (bytes, bytearray)):
+                return bytes(res[0])
+        except Exception as e:
+            logger.exception("Error descargando desde Supabase storage: %s", e)
+            # continuar a intentar ruta publica
 
-# Health simple (sin DB) - aceptar HEAD para Render
-@app.get("/health", response_class=PlainTextResponse)
-@app.head("/health", include_in_schema=False)
-async def health():
-    return PlainTextResponse("OK", status_code=200)
+    # 2) intentar descargar por HTTP desde ruta_publica
+    if ruta_publica:
+        try:
+            r = requests.get(ruta_publica, timeout=15)
+            r.raise_for_status()
+            return r.content
+        except Exception as e:
+            logger.exception("Error descargando desde ruta publica: %s", e)
 
+    # no se pudo obtener
+    raise HTTPException(status_code=404, detail="PDF no encontrado en storage ni en ruta publica")
 
-# Health que comprueba la BD (dependencia puede lanzar HTTPException 503)
-@app.get("/health/db", response_class=PlainTextResponse)
-def health_db(db = Depends(obtener_bd)):
-    return PlainTextResponse("OK", status_code=200)
+# genera destino para preview dentro del bucket (sin '/')
+def generar_destino_preview(path_archivo: str, pagina: int) -> str:
+    seguro = path_archivo.replace("/", "_")
+    return f"previews/{seguro}_pagina_{pagina}.png"
 
+# iterador para streaming desde requests
+def _iter_requests_content(resp: requests.Response, chunk_size: int = 8192) -> Iterator[bytes]:
+    for chunk in resp.iter_content(chunk_size=chunk_size):
+        if chunk:
+            yield chunk
 
-# ---------- test db ----------
-@app.get("/test-db")
-def test_db(db = Depends(obtener_bd)):
-    try:
-        row = db.execute(text("SELECT 1")).fetchone()
-        return {"ok": True, "result": row[0] if row else None}
-    except Exception as e:
-        logger.exception("test-db error: %s", e)
-        return {"ok": False, "error": str(e)}
-
-
-# ---------- usuarios ----------
-@app.get("/usuarios", response_model=List[RespuestaUsuario])
-def listar_usuarios(db=Depends(obtener_bd)):
-    try:
-        usuarios = db.query(Usuario).order_by(Usuario.id).all()
-        return usuarios
-    except OperationalError:
-        logger.exception("listar_usuarios: OperationalError")
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
-    except Exception:
-        logger.exception("listar_usuarios: unexpected")
-        raise HTTPException(status_code=500, detail="Error interno al listar usuarios")
-
-
-@app.post("/usuarios", response_model=RespuestaUsuario, status_code=201)
-def crear_usuario(payload: UsuarioCreate = Body(...), db=Depends(obtener_bd)):
-    try:
-        existing = db.query(Usuario).filter(Usuario.codigo == payload.codigo).first()
-        if existing:
-            raise HTTPException(status_code=400, detail="Codigo ya registrado")
-
-        clave_to_store = None
-        if payload.clave is not None:
-            clave_to_store = payload.clave if isinstance(payload.clave, str) else str(payload.clave)
-
-        rol_value = payload.rol.value if hasattr(payload.rol, "value") else payload.rol
-
-        nuevo = Usuario(
-            rol=rol_value,
-            codigo=payload.codigo,
-            clave=clave_to_store,
-        )
-        db.add(nuevo)
-        db.commit()
-        db.refresh(nuevo)
-        return nuevo
-    except OperationalError:
-        logger.exception("crear_usuario: OperationalError")
-        db.rollback()
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
-    except IntegrityError:
-        logger.exception("crear_usuario: IntegrityError")
-        db.rollback()
-        raise HTTPException(status_code=400, detail="Codigo duplicado")
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("crear_usuario: unexpected")
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Error interno al crear usuario")
-
-
-@app.put("/usuarios/{usuario_id}", response_model=RespuestaUsuario)
-def actualizar_usuario(
-    usuario_id: int = Path(...),
-    payload: UsuarioUpdate = Body(...),
-    db=Depends(obtener_bd),
+# Endpoint: preview -> convierte una pagina a PNG
+@app.get("/recursos/{id_recurso}/preview", responses={200: {"content": {"image/png": {}}}})
+def recurso_preview(
+    id_recurso: int = Path(..., description="ID del recurso"),
+    pagina: int = Query(0, ge=0, description="Pagina del PDF (0-index)"),
+    subir_cache: bool = Query(False, description="Si true sube preview a Supabase y devuelve X-Preview-Url"),
+    db = Depends(obtener_bd),
 ):
     try:
-        item = db.query(Usuario).filter(Usuario.id == usuario_id).first()
-        if not item:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        consulta = text("SELECT ruta, file_path FROM recursos WHERE id = :id")
+        fila = db.execute(consulta, {"id": id_recurso}).mappings().fetchone()
+        if not fila:
+            raise HTTPException(status_code=404, detail="Recurso no encontrado")
 
-        if hasattr(payload, "model_dump"):
-            data = payload.model_dump(exclude_unset=True)
-        else:
-            data = payload.dict(exclude_unset=True)
+        ruta = fila.get("ruta")
+        path_archivo = fila.get("file_path")
 
-        data.pop("id", None)
-        data.pop("creado_en", None)
+        if not path_archivo and ruta:
+            path_archivo = extract_path_from_supabase_public_url(ruta)
 
-        if "clave" in data and data["clave"] is not None:
-            data["clave"] = data["clave"] if isinstance(data["clave"], str) else str(data["clave"])
+        # obtener bytes del PDF (puede lanzar 404)
+        bytes_pdf = obtener_bytes_pdf_desde_recurso(ruta, path_archivo)
 
-        if "codigo" in data and data["codigo"] != item.codigo:
-            collision = db.query(Usuario).filter(Usuario.codigo == data["codigo"]).first()
-            if collision:
-                raise HTTPException(status_code=400, detail="Codigo ya en uso por otro usuario")
+        # convertir con PyMuPDF
+        try:
+            import fitz  # pymupdf
+        except Exception:
+            logger.exception("PyMuPDF no disponible")
+            raise HTTPException(status_code=500, detail="PyMuPDF no esta instalado en el servidor")
 
-        if "rol" in data and data["rol"] is not None:
-            data["rol"] = data["rol"].value if hasattr(data["rol"], "value") else data["rol"]
+        doc = fitz.open(stream=bytes_pdf, filetype="pdf")
 
-        for k, v in data.items():
-            if hasattr(item, k):
-                setattr(item, k, v)
+        if pagina < 0 or pagina >= doc.page_count:
+            raise HTTPException(status_code=400, detail="Pagina fuera de rango")
 
-        db.add(item)
-        db.commit()
-        db.refresh(item)
-        return item
-    except OperationalError:
-        logger.exception("actualizar_usuario: OperationalError")
-        db.rollback()
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+        pag = doc.load_page(pagina)
+        pix = pag.get_pixmap(dpi=150)
+        img_bytes = pix.tobytes("png")
+
+        headers = {"Cache-Control": "public, max-age=300"}
+
+        if subir_cache and path_archivo and supabase:
+            try:
+                destino = generar_destino_preview(path_archivo, pagina)
+                # intentar usar tu helper upload_bytes_to_supabase
+                try:
+                    url_publica = upload_bytes_to_supabase(img_bytes, destino)
+                except Exception:
+                    # fallback directo al SDK
+                    try:
+                        supabase.storage.from_(BUCKET_NAME).upload(destino, io.BytesIO(img_bytes))
+                        pu = supabase.storage.from_(BUCKET_NAME).get_public_url(destino)
+                        if isinstance(pu, dict):
+                            url_publica = pu.get("publicUrl") or pu.get("publicURL") or pu.get("public_url") or str(pu)
+                        else:
+                            url_publica = str(pu)
+                    except Exception as e:
+                        logger.exception("Error subiendo preview via SDK: %s", e)
+                        url_publica = None
+                if url_publica:
+                    headers["X-Preview-Url"] = str(url_publica)
+            except Exception:
+                logger.exception("Fallo no critico al subir preview")
+
+        return Response(content=img_bytes, media_type="image/png", headers=headers)
+
     except HTTPException:
         raise
-    except Exception:
-        logger.exception("actualizar_usuario: unexpected")
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Error interno al actualizar usuario")
+    except Exception as e:
+        logger.exception("Error en recurso_preview: %s", e)
+        raise HTTPException(status_code=500, detail="Error interno al generar preview")
 
 
-@app.delete("/usuarios/{usuario_id}", response_model=dict)
-def eliminar_usuario(usuario_id: int = Path(...), db=Depends(obtener_bd)):
+# Endpoint: download -> devuelve PDF original (streaming)
+@app.get("/recursos/{id_recurso}/download", responses={200: {"content": {"application/pdf": {}}}})
+def recurso_download(
+    id_recurso: int = Path(..., description="ID del recurso"),
+    db = Depends(obtener_bd),
+):
     try:
-        item = db.query(Usuario).filter(Usuario.id == usuario_id).first()
-        if not item:
-            raise HTTPException(status_code=404, detail="Usuario no encontrado")
-        db.delete(item)
-        db.commit()
-        return {"ok": True}
-    except OperationalError:
-        logger.exception("eliminar_usuario: OperationalError")
-        db.rollback()
-        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
-    except Exception:
-        logger.exception("eliminar_usuario: unexpected")
-        db.rollback()
-        raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
+        consulta = text("SELECT ruta, file_path, titulo FROM recursos WHERE id = :id")
+        fila = db.execute(consulta, {"id": id_recurso}).mappings().fetchone()
+        if not fila:
+            raise HTTPException(status_code=404, detail="Recurso no encontrado")
 
+        ruta = fila.get("ruta")
+        path_archivo = fila.get("file_path")
+        titulo = fila.get("titulo") or "documento"
+        nombre_seguro = sanitizar_nombre(titulo) + ".pdf"
+
+        # intentar descargar desde supabase storage si path_archivo
+        if path_archivo and supabase:
+            try:
+                res = supabase.storage.from_(BUCKET_NAME).download(path_archivo)
+                datos = _normalizar_respuesta_supabase(res)
+                if datos is not None:
+                    fileobj = io.BytesIO(datos)
+                    headers = {"Content-Disposition": f'attachment; filename="{nombre_seguro}"'}
+                    return StreamingResponse(fileobj, media_type="application/pdf", headers=headers)
+                # si res es file-like y no lo leimos antes, intentar usarlo directo
+                if hasattr(res, "read") and not isinstance(res, (bytes, bytearray)):
+                    headers = {"Content-Disposition": f'attachment; filename="{nombre_seguro}"'}
+                    try:
+                        return StreamingResponse(res, media_type="application/pdf", headers=headers)
+                    except Exception:
+                        pass
+            except Exception as e:
+                logger.exception("Error descargando desde storage para download: %s", e)
+                # fallback a ruta publica
+
+        # fallback: intentar ruta publica por HTTP (si existe)
+        if ruta:
+            try:
+                r = requests.get(ruta, timeout=15, stream=True)
+                r.raise_for_status()
+                headers = {"Content-Disposition": f'attachment; filename="{nombre_seguro}"'}
+                return StreamingResponse(_iter_requests_content(r), media_type="application/pdf", headers=headers)
+            except Exception as e:
+                logger.exception("Error descargando ruta publica para download: %s", e)
+
+        raise HTTPException(status_code=404, detail="PDF no disponible para descarga")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Error en recurso_download: %s", e)
+        raise HTTPException(status_code=500, detail="Error interno al descargar PDF")
+
+# -------------------------------------------------
+# FIN: FUNCIONES Y ENDPOINTS PDF
+# -------------------------------------------------
 
 # ---------- recursos CRUD ----------
 @app.get("/recursos", response_model=List[RecursoOut])
@@ -820,6 +871,16 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
 
     return usuario
 
+
+# -------------------------------------------------
+# Incluir pdf_control router (import despues de inicializar supabase y helpers)
+# -------------------------------------------------
+try:
+    from pdf_control import router as pdf_router  # type: ignore
+    app.include_router(pdf_router)
+    logger.info("pdf_control router incluido correctamente")
+except Exception as e:
+    logger.exception("No se pudo incluir pdf_control router: %s", e)
 
 # run local (solo para debug)
 if __name__ == "__main__":
