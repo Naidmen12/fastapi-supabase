@@ -2,7 +2,6 @@
 import os
 import io
 import uuid
-import traceback
 import tempfile
 import logging
 import re
@@ -168,7 +167,6 @@ def upload_bytes_to_supabase(file_bytes: bytes, dest_path_in_bucket: str) -> str
         logger.exception("Error subiendo archivo a Supabase: %s", e)
         raise HTTPException(status_code=500, detail=f"Error interno al subir archivo: {str(e)}")
 
-
 # -----------------------
 # RUTAS RAIZ y HEALTH
 # -----------------------
@@ -198,6 +196,114 @@ def test_db(db = Depends(obtener_bd)):
         logger.exception("test-db error: %s", e)
         return {"ok": False, "error": str(e)}
 
+# -----------------------
+# RUTAS USUARIOS CRUD
+# -----------------------
+@app.get("/usuarios", response_model=List[RespuestaUsuario])
+def listar_usuarios(db = Depends(obtener_bd)):
+    try:
+        q = text("SELECT id, rol, codigo, clave, creado_en FROM usuarios ORDER BY id")
+        rows = db.execute(q).mappings().all()
+        result = []
+        for r in rows:
+            result.append({
+                "id": r["id"],
+                "rol": r["rol"],
+                "codigo": r["codigo"],
+                "clave": r["clave"],
+            })
+        return result
+    except OperationalError:
+        logger.exception("listar_usuarios: OperationalError")
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except Exception:
+        logger.exception("listar_usuarios: unexpected")
+        raise HTTPException(status_code=500, detail="Error interno al listar usuarios")
+
+@app.post("/usuarios", response_model=RespuestaUsuario, status_code=201)
+def crear_usuario(payload: UsuarioCreate = Body(...), db = Depends(obtener_bd)):
+    try:
+        rol_val = payload.rol.value if hasattr(payload.rol, "value") else payload.rol
+        insert_sql = text("""
+            INSERT INTO usuarios (rol, codigo, clave)
+            VALUES (:rol, :codigo, :clave)
+            RETURNING id, rol, codigo, clave, creado_en
+        """)
+        params = {"rol": rol_val, "codigo": payload.codigo, "clave": payload.clave}
+        row = db.execute(insert_sql, params).mappings().fetchone()
+        db.commit()
+        if not row:
+            raise HTTPException(status_code=500, detail="No se pudo crear el usuario")
+        return {"id": row["id"], "rol": row["rol"], "codigo": row["codigo"], "clave": row["clave"]}
+    except IntegrityError as e:
+        db.rollback()
+        logger.exception("crear_usuario: IntegrityError")
+        raise HTTPException(status_code=400, detail="Usuario ya existe o dato invalido")
+    except OperationalError:
+        db.rollback()
+        logger.exception("crear_usuario: OperationalError")
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("crear_usuario: unexpected: %s", e)
+        raise HTTPException(status_code=500, detail="Error interno al crear usuario")
+
+@app.put("/usuarios/{usuario_id}", response_model=RespuestaUsuario)
+def actualizar_usuario(usuario_id: int = Path(...), payload: UsuarioUpdate = Body(...), db = Depends(obtener_bd)):
+    try:
+        # obtener datos enviados (compatible pydantic v1 y v2)
+        if hasattr(payload, "model_dump"):
+            data = payload.model_dump(exclude_unset=True)
+        else:
+            data = payload.dict(exclude_unset=True)
+
+        if not data:
+            raise HTTPException(status_code=400, detail="No hay campos para actualizar")
+
+        set_fragments = []
+        params = {"id": usuario_id}
+        idx = 0
+        for k, v in data.items():
+            idx += 1
+            key = f"v{idx}"
+            set_fragments.append(f"{k} = :{key}")
+            params[key] = v
+
+        set_sql = ", ".join(set_fragments)
+        update_sql = text(f"UPDATE usuarios SET {set_sql} WHERE id = :id RETURNING id, rol, codigo, clave, creado_en")
+        row = db.execute(update_sql, params).mappings().fetchone()
+        db.commit()
+        if not row:
+            raise HTTPException(status_code=404, detail="Usuario no encontrado")
+        return {"id": row["id"], "rol": row["rol"], "codigo": row["codigo"], "clave": row["clave"]}
+    except OperationalError:
+        db.rollback()
+        logger.exception("actualizar_usuario: OperationalError")
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.exception("actualizar_usuario: unexpected: %s", e)
+        raise HTTPException(status_code=500, detail="Error interno al actualizar usuario")
+
+@app.delete("/usuarios/{usuario_id}", response_model=dict)
+def eliminar_usuario(usuario_id: int = Path(...), db = Depends(obtener_bd)):
+    try:
+        delete_sql = text("DELETE FROM usuarios WHERE id = :id")
+        db.execute(delete_sql, {"id": usuario_id})
+        db.commit()
+        return {"ok": True}
+    except OperationalError:
+        db.rollback()
+        logger.exception("eliminar_usuario: OperationalError")
+        raise HTTPException(status_code=503, detail="Servicio de base de datos no disponible")
+    except Exception as e:
+        db.rollback()
+        logger.exception("eliminar_usuario: unexpected: %s", e)
+        raise HTTPException(status_code=500, detail="Error interno al eliminar usuario")
 
 # -------------------------------------------------
 # INICIO: FUNCIONES Y ENDPOINTS PDF -> IMAGEN / DOWNLOAD
@@ -344,7 +450,6 @@ def recurso_preview(
         logger.exception("Error en recurso_preview: %s", e)
         raise HTTPException(status_code=500, detail="Error interno al generar preview")
 
-
 # Endpoint: download -> devuelve PDF original (streaming)
 @app.get("/recursos/{id_recurso}/download", responses={200: {"content": {"application/pdf": {}}}})
 def recurso_download(
@@ -431,7 +536,6 @@ def listar_recursos(db=Depends(obtener_bd)):
         logger.exception("listar_recursos: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al listar recursos")
 
-
 @app.post("/recursos", response_model=RecursoOut)
 def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
     try:
@@ -490,7 +594,6 @@ def crear_recurso(payload: RecursoCreate = Body(...), db=Depends(obtener_bd)):
         logger.exception("crear_recurso: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al crear recurso")
-
 
 @app.put("/recursos/{recurso_id}", response_model=RecursoOut)
 def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Body(...), db=Depends(obtener_bd)):
@@ -557,7 +660,6 @@ def actualizar_recurso(recurso_id: int = Path(...), payload: RecursoUpdate = Bod
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al actualizar recurso")
 
-
 @app.delete("/recursos/{recurso_id}", response_model=dict)
 def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
     try:
@@ -589,7 +691,6 @@ def eliminar_recurso(recurso_id: int = Path(...), db=Depends(obtener_bd)):
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar recurso")
 
-
 # ---------- storage endpoints ----------
 @app.post("/recursos/upload", response_model=dict)
 async def upload_recurso_file(file: UploadFile = File(...)):
@@ -610,7 +711,6 @@ async def upload_recurso_file(file: UploadFile = File(...)):
         logger.exception("upload_recurso_file: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al subir archivo")
 
-
 @app.delete("/recursos/delete_file/{file_path:path}", response_model=dict)
 def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa dentro del bucket (puede contener /)")):
     if not supabase:
@@ -623,7 +723,6 @@ def delete_file_endpoint(file_path: str = Path(..., description="Ruta relativa d
     except Exception:
         logger.exception("delete_file_endpoint: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al eliminar archivo")
-
 
 @app.post("/recursos/upload_and_create", response_model=dict)
 async def upload_and_create_recurso(
@@ -721,7 +820,6 @@ async def upload_and_create_recurso(
         except Exception:
             pass
 
-
 # ---------- pestanas CRUD ----------
 @app.get("/pestanas", response_model=List[PestanaOut])
 def listar_pestanas(db = Depends(obtener_bd)):
@@ -743,7 +841,6 @@ def listar_pestanas(db = Depends(obtener_bd)):
     except Exception:
         logger.exception("listar_pestanas: unexpected")
         raise HTTPException(status_code=500, detail="Error interno al listar pestanas")
-
 
 @app.post("/pestanas", response_model=PestanaOut, status_code=201)
 def crear_pestana(payload: PestanaCreate = Body(...), db = Depends(obtener_bd)):
@@ -777,7 +874,6 @@ def crear_pestana(payload: PestanaCreate = Body(...), db = Depends(obtener_bd)):
         logger.exception("crear_pestana: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al crear pestana")
-
 
 @app.put("/pestanas/{pestana_id}", response_model=PestanaOut)
 def actualizar_pestana(pestana_id: int = Path(...), payload: PestanaUpdate = Body(...), db = Depends(obtener_bd)):
@@ -840,7 +936,6 @@ def actualizar_pestana(pestana_id: int = Path(...), payload: PestanaUpdate = Bod
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al actualizar pestana")
 
-
 @app.delete("/pestanas/{pestana_id}", response_model=dict)
 def eliminar_pestana(pestana_id: int = Path(...), db = Depends(obtener_bd)):
     try:
@@ -863,7 +958,6 @@ def eliminar_pestana(pestana_id: int = Path(...), db = Depends(obtener_bd)):
         logger.exception("eliminar_pestana: unexpected")
         db.rollback()
         raise HTTPException(status_code=500, detail="Error interno al eliminar pestana")
-
 
 # ---------- login ----------
 @app.post("/login", response_model=RespuestaUsuario)
@@ -900,7 +994,6 @@ def login(datos: PeticionInicio, db=Depends(obtener_bd)):
             raise HTTPException(status_code=401, detail="Clave incorrecta")
 
     return usuario
-
 
 # -------------------------------------------------
 # Incluir pdf_control router (import despues de inicializar supabase y helpers)
